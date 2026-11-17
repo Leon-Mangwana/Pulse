@@ -11,7 +11,7 @@ data:
 
 synth:                        # synthetic data generator (src/pulse/synth.py)
   n_customers: 5000
-  churn_rate: 0.10            # share of customers who churn inside the window
+  churn_rate: 0.15            # share of customers who churn inside the 24-month window (about 7.5% a year)
   closed_share_of_churn: 0.20 # of churners, share who formally close; the rest fade silently
   no_warning_share_of_churn: 0.12   # churners who vanish with no warning signs at all
   false_alarm_rate: 0.08      # non-churners who show warning signs and then recover
@@ -27,3 +27,19 @@ synth:                        # synthetic data generator (src/pulse/synth.py)
     sme: 0.15
     informal: 0.30
     diaspora: 0.10
+
+fx:
+  zig_per_usd: 30.0           # one rate to express ZiG balances and flows in USD; replace with the bank's rate
+
+target:                       # churn label (src/pulse/target.py)
+  horizon_days: 90            # label window after the snapshot date
+  silent_threshold: 0.20      # silent churn: activity AND balance fall below this share of own baseline
+  baseline_months: 6          # months before the snapshot that define the customer's own baseline
+  min_history_months: 6       # snapshots with less history than this are dropped
+  inactive_min_txns_3m: 3     # fewer non-fee transactions than this in the 3 months before = already inactive, dropped
+
+features:                     # feature families (src/pulse/features/)
+  baseline_months: 6          # "change versus own baseline" compares the last month with the 6 before it
+  cap_months: 12              # months-since counters are capped here
+  salary_tolerance: 0.30      # a credit within +-30% of the reference amount counts as the same salary
+  salary_min_usd: 50          # ignore "salaries" smaller than this
