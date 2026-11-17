@@ -47,5 +47,6 @@ docs/        notes.md (my explanations), metrics.md (results per run)
 
 ## How to work
 - Propose a short plan and wait for my go-ahead before writing code.
-- Small commits, one concern each. Run the tests before saying a task is done.
+- Never commit. At the start of a phase create a git branch for it (for example
+  `phase-1-features`) and leave all committing to me. Run the tests before saying a task is done.
 - After each task, append results to docs/metrics.md and tell me what to check by hand.
