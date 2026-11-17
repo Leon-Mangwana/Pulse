@@ -49,4 +49,7 @@ docs/        notes.md (my explanations), metrics.md (results per run)
 - Propose a short plan and wait for my go-ahead before writing code.
 - Never commit. At the start of a phase create a git branch for it (for example
   `phase-1-features`) and leave all committing to me. Run the tests before saying a task is done.
+- No Claude attribution anywhere in the repository. Never add `Co-Authored-By`,
+  `Generated with Claude Code` or any similar line to commit messages, pull requests,
+  code comments or docs. Claude must not appear as a contributor on GitHub.
 - After each task, append results to docs/metrics.md and tell me what to check by hand.
