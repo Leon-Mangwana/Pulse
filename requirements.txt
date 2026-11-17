@@ -2,7 +2,7 @@
 # core data
 numpy==2.4.6
 pandas==2.3.3
-pyarrow==26.0.1
+# pyarrow is NOT used: its native library is blocked by Windows Application Control; parquet goes through duckdb
 duckdb==2.0.0
 PyYAML==6.0.3
 # modelling

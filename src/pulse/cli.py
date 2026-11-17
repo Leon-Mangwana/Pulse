@@ -4,7 +4,9 @@
     python -m pulse.cli ingest      load data/raw through schema.yaml into DuckDB + quality report
     python -m pulse.cli pipeline    run every built step in order and print timings
 
-Steps for later phases (features, train, score) are registered but not built yet.
+    python -m pulse.cli features    build the snapshot table with features and churn label
+
+Steps for later phases (train, score) are registered but not built yet.
 """
 from __future__ import annotations
 
@@ -29,15 +31,20 @@ def step_ingest():
     ingest.main()
 
 
+def step_features():
+    from pulse.features import build
+    build.main()
+
+
 STEPS = {
     "data": step_data,
     "ingest": step_ingest,
-    "features": _not_built("features"),
+    "features": step_features,
     "train": _not_built("train"),
     "score": _not_built("score"),
 }
 # the pipeline never regenerates data: on hackathon day the raw folder holds the bank's files
-PIPELINE = ["ingest"]
+PIPELINE = ["ingest", "features"]
 
 
 def run_pipeline():

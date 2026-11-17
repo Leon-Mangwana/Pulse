@@ -322,7 +322,7 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
     # --- activity level (multiplies transaction counts) ---
     act = rng.lognormal(0, 0.15, (n, M)) * np.where(cal_month[None, :] == 12, 1.2, 1.0)
     act = act * np.where(sign("sign_activity_drop"), 1 - 0.65 * prog, 1.0)
-    act = np.where(post_silent, 0.08 * rng.lognormal(0, 0.3, (n, M)), act)
+    act = np.where(post_silent, 0.03 * rng.lognormal(0, 0.3, (n, M)), act)
     act = np.where(closed & (m == churn_m), act * col("churn_day") / dim[None, :], act)
     act = act * alive
 
@@ -342,6 +342,7 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
              * rng.lognormal(0, 0.15, (n, M)))
     biz = pcol("biz_inflow") * col("scale") * rng.lognormal(0, 0.35, (n, M)) * np.minimum(act, 1.5)
     biz = np.where(biz < 3.0, 0.0, biz)
+    biz = np.where(post_silent & (rng.random((n, M)) > 0.10), 0.0, biz)   # a gone customer rarely still receives money
     school = (col("has_school") * np.isin(cal_month, [1, 5, 9])[None, :] * (rng.random((n, M)) < 0.9)
               * col("school_usd") * rng.lognormal(0, 0.1, (n, M)) * alive * ~post)
 
@@ -359,30 +360,36 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
     typical = (col("has_salary") * col("salary_usd") + col("has_remit") * col("remit_usd")
                + pcol("biz_inflow") * col("scale"))[:, 0]
     in_window = open_m[:, 0] >= 0
-    bal = np.where(in_window, 0.0, typical * rng.uniform(0.2, 1.5, n))
+    open_plan = np.where(in_window, 0.0, typical * rng.uniform(0.2, 1.5, n))   # opening balance of the main account
+    bal = open_plan.copy()
     init_dep = np.where(in_window, typical * rng.uniform(0.1, 0.8, n), 0.0)
     bal = bal + init_dep
     sav_bal = np.where(has_sav & (sav_open_m < 0), typical * rng.uniform(0.2, 2.0, n), 0.0)
     sav_init = sav_bal.copy()
-    out = np.zeros((n, M)); dep = np.zeros((n, M)); wd = np.zeros((n, M)); bal_end = np.zeros((n, M))
+    out = np.zeros((n, M)); dep = np.zeros((n, M)); wd = np.zeros((n, M)); bal_end = np.zeros((n, M)); svc_fee = np.zeros((n, M))
     drain = sign("sign_balance_drain")
     for k in range(M):
         a = alive[:, k]
         sav_live = has_sav & (sav_open_m <= k) & a
-        w = np.where(sav_live & (drain[:, k] | post_silent[:, k]), 0.6 * sav_bal, 0.0)
+        w = np.where(sav_live & (drain[:, k] | (post_silent[:, k] & (k - churn_m[:, 0] <= 1))), 0.6 * sav_bal, 0.0)
         inflow0 = salary[:, k] + remit[:, k] + biz[:, k]
         inflow = (inflow0 + w) * a
         # spending comes out of what was in the account at the start of the month (plus any
         # savings withdrawn), so the running balance can never dip below zero mid-month
         desired = (inflow0 * spend[:, k] + school[:, k] + w
                    + np.where(drain[:, k], (0.3 + 0.5 * prog[:, k]) * bal, 0.0)
-                   + np.where(post_silent[:, k], np.where(k - churn_m[:, 0] <= 1, 0.6, 0.25) * bal, 0.0))
+                   + np.where(post_silent[:, k], np.select([k - churn_m[:, 0] == 0, k - churn_m[:, 0] == 1], [0.85, 0.5], 0.0) * bal, 0.0))
         cap = np.maximum(0.97 * bal + w - 2 * cfg["monthly_service_fee_usd"], 0.0)
         o = np.minimum(desired, cap) * a
         o = np.where(o < 5.0, 0.0, o)          # nothing happens in a month with under $5 of spending
         d = np.where(sav_live & ~window[:, k] & ~post[:, k] & (k > sav_open_m), 0.08 * o, 0.0)
         out[:, k], dep[:, k], wd[:, k] = o, d, w
-        bal = bal + inflow - o
+        # the service fee leaves the account too; the statement must charge exactly what the plan
+        # deducts, otherwise balances drift away from the plan (transfer fees are carved out of the
+        # transfer amounts below, so they need no deduction here)
+        svc = np.where(a & (bal + inflow - o > 3 * cfg["monthly_service_fee_usd"]), cfg["monthly_service_fee_usd"], 0.0)
+        svc_fee[:, k] = svc
+        bal = bal + inflow - o - svc
         sav_bal = sav_bal + d - w
         bal_end[:, k] = bal
 
@@ -398,7 +405,6 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
 
     base = pcol("base_txn") * act
     leak_ratio = leak / pcol("leak_share")
-    fee_ok = bal_end > 3 * cfg["monthly_service_fee_usd"]
 
     # transaction counts per kind; in quiet months a kind may draw zero, in which case its
     # money is spent through the card instead so the plan still adds up
@@ -406,7 +412,7 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
     n_atm, n_util, n_pos = _pois(rng, base * 0.15), _pois(rng, base * 0.15), _pois(rng, base * 0.35)
     for amt_arr, cnt_arr, floor in [(sup, n_sup, 0), (atm, n_atm, 0), (util, n_util, 0),
                                     (wallet, n_wallet, 10), (obank, n_obank, 10)]:   # leakage rows survive unless tiny
-        zero = (cnt_arr == 0) & (amt_arr > 0) & ((floor == 0) | (amt_arr < floor))
+        zero = (cnt_arr == 0) & (amt_arr > 0) & ((floor == 0) | (amt_arr < floor) | post_silent)
         pos = pos + np.where(zero, amt_arr, 0.0)
         amt_arr[zero] = 0.0
 
@@ -472,7 +478,7 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
         uniform_day)
     add(util, n_util, "debit", ["USSD", "mobile app"], [0.5, 0.5], "merchant",
         lambda ci, mo, k: pick(UTILITIES, k), uniform_day)
-    add(np.where(alive & fee_ok, cfg["monthly_service_fee_usd"], 0.0), np.ones((n, M), int), "debit",
+    add(svc_fee, np.ones((n, M), int), "debit",
         ["branch"], None, "fee", lambda ci, mo, k: np.repeat("MONTHLY SERVICE FEE", k),
         lambda ci, mo, k: dim[mo] - 1)
     # internal transfers between the two accounts (a row on each side)
@@ -480,10 +486,11 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
         (dep, "debit", "credit", "TRANSFER TO SAVINGS", "TRANSFER FROM CURRENT"),
         (wd, "credit", "debit", "TRANSFER FROM SAVINGS", "TRANSFER TO CURRENT"),
     ]:
+        day_fn = uniform_day if d_main == "debit" else (lambda ci, mo, k: rng.integers(0, 3, k))
         add(total, np.ones((n, M), int), d_main, ["mobile app", "branch"], [0.8, 0.2], "self",
-            lambda ci, mo, k, s=desc_main: np.repeat(s, k), uniform_day, "main")
+            lambda ci, mo, k, s=desc_main: np.repeat(s, k), day_fn, "main")
         add(total, np.ones((n, M), int), d_sav, ["mobile app", "branch"], [0.8, 0.2], "self",
-            lambda ci, mo, k, s=desc_sav: np.repeat(s, k), uniform_day, "savings")
+            lambda ci, mo, k, s=desc_sav: np.repeat(s, k), day_fn, "savings")
     # initial deposits for accounts opened inside the window
     add(init_dep[:, None] * (m == open_m), np.ones((n, M), int), "credit", ["branch"], None, "cash",
         lambda ci, mo, k: np.repeat("INITIAL DEPOSIT", k),
@@ -503,7 +510,9 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
     # fee lines for interbank transfers, and a few reversals (friction signals)
     xfer = tx[(tx["channel"].isin(["RTGS", "ZIPIT"])) & (tx["direction"] == "debit")]
     fees = xfer.copy()
-    fees["amount_usd"] = np.minimum(0.01 * xfer["amount_usd"] + 0.5, 5.0)
+    fee_amt = np.minimum(np.minimum(0.01 * xfer["amount_usd"] + 0.5, 5.0), 0.5 * xfer["amount_usd"])
+    fees["amount_usd"] = fee_amt
+    tx.loc[xfer.index, "amount_usd"] = xfer["amount_usd"] - fee_amt      # fee comes out of the transfer, totals unchanged
     fees["counterparty_type"] = "fee"
     fees["description"] = np.where(xfer["channel"] == "RTGS", "RTGS FEE", "ZIPIT FEE")
     rev_pool = tx[tx["direction"] == "debit"].index.to_numpy()
@@ -511,7 +520,9 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
     rev["direction"] = "credit"
     rev["description"] = "REVERSAL " + rev["description"]
     rev["day"] = np.minimum(rev["day"] + rng.integers(0, 2, len(rev)), dim[rev["mo"]] - 1)
-    tx = pd.concat([tx, fees, rev], ignore_index=True)
+    retry = tx.loc[rev.index].copy()                     # the customer pays again after the reversal
+    retry["day"] = np.minimum(rev["day"] + 1, dim[rev["mo"]] - 1)
+    tx = pd.concat([tx, fees, rev, retry], ignore_index=True)
 
     # attach accounts, dates, currency
     main_acct = acct[acct["product_type"] == "current"].set_index("customer_id")
@@ -536,13 +547,17 @@ def _transactions(rng, cust, truth, acct, cfg, start, M):
     tx = tx.sort_values(["account_id", "txn_date", "seq"]).reset_index(drop=True)
     signed = np.where(tx["direction"] == "credit", tx["amount"], -tx["amount"])
     cum = pd.Series(signed).groupby(tx["account_id"].to_numpy()).cumsum().to_numpy()
-    opening = pd.Series(cum).groupby(tx["account_id"].to_numpy()).min().clip(upper=0).mul(-1)
-    pre_window = (acct.set_index("account_id")["open_date"] < start)
-    base_open = pd.Series(np.where(pre_window.reindex(opening.index), 1.0, 0.0), index=opening.index)
-    typical_by_acct = pd.Series(typical, index=cust["customer_id"]).reindex(acct["customer_id"]).to_numpy()
-    base_open = base_open * pd.Series(typical_by_acct * rng.uniform(0.2, 1.5, len(acct)), index=acct["account_id"]).reindex(opening.index)
+    cum_min = pd.Series(cum).groupby(tx["account_id"].to_numpy()).min()
+    opening = pd.Series(0.0, index=cum_min.index)
+    # the statement must start from the same opening balance the monthly plan started from
+    owner_i = pd.Series(np.arange(n), index=cust["customer_id"]).reindex(acct["customer_id"]).to_numpy()
+    is_sav_acct = (acct["product_type"] == "savings").to_numpy()
+    base_open = np.where(is_sav_acct, np.where(sav_open_m[owner_i] < 0, sav_init[owner_i], 0.0), open_plan[owner_i])
+    base_open = pd.Series(base_open, index=acct["account_id"]).reindex(opening.index)
     base_open = base_open * np.where(acct_cur.reindex(opening.index) == "ZiG", zig_rate[0], 1.0)
-    opening = (opening + base_open.fillna(0)).round(2)
+    base_open = base_open.fillna(0)
+    need = (-(cum_min + base_open)).clip(lower=0)        # only if the path would still dip below zero
+    opening = (base_open + need).round(2)
     tx["balance_after"] = (cum + opening.reindex(tx["account_id"]).to_numpy()).round(2) + 0.0
 
     # closure: closed accounts withdraw whatever is left on the close date

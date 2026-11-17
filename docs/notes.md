@@ -97,3 +97,92 @@ stop the run; soft ones are printed as warnings. The report is saved to
 - *Could the model just learn the generator?* Partly, which is why the noise layers
   exist and why Phase 8 rehearses on data with different shape. The synthetic data proves
   the pipeline works end to end; the real data on the day gives the real numbers.
+
+## Phase 1: Signal Factory and churn target (17 Nov 2026)
+
+### The snapshot table in one picture
+
+One row per customer per month-end. Features on a row use only transactions dated on or
+before that month-end. The label on the row uses only the 90 days after it. Column m of
+every internal array holds what happened IN month m; a snapshot at the end of month m
+reads columns <= m for features and columns > m for the label. There is no way for the
+two to share a month, and `tests/test_features.py` proves it: it rewrites, deletes and
+adds transactions after a snapshot date and asserts every feature at or before that date
+is byte-for-byte unchanged, while the labels do change.
+
+### How the data flows
+
+1. `features/monthly.py` collapses 1.8 million transactions into (5,000 customers x 24
+   months) arrays: counts, active days, money in and out by counterparty type, channel
+   counts, the largest credit of the month and its payer, and the month-end balance per
+   account carried forward over quiet months and converted to USD.
+2. Each feature family (`income`, `balance`, `leakage`, `engagement`, `friction`,
+   `life_events`) is a pure function from those arrays to new (customers x months)
+   arrays, built with rolling-window helpers that only ever look left.
+3. `target.py` computes the label the same way, looking only right.
+4. `features/build.py` picks the eligible cells and writes one row each.
+
+### The churn label, exactly
+
+`churn_90d = 1` when, in the 90 days after the snapshot, the customer either
+
+- **hard churn**: an account close date falls inside the window, or
+- **silent churn**: their customer-initiated transactions per month (bank fee lines do
+  not count) AND their average month-end balance over the next three calendar months
+  both fall below 20% of their own average over the six months up to the snapshot.
+
+The 20%, 90 days and 6 months live in `settings.yaml` under `target`. Silent churn uses
+three calendar months (89 to 92 days) because activity is aggregated monthly; hard churn
+uses exact days. `days_to_churn` is exact for closures and the end of the first quiet
+month for silent churn.
+
+Rows are dropped when the customer has under six months of data, has already closed,
+has fewer than three customer-initiated transactions in the previous three months
+(already inactive: predicting churn for them is trivial and useless), or when fewer
+than 90 days of data follow (those rows keep their features for scoring but have an
+empty label and `labelled = 0`).
+
+### Salary without labels
+
+The salary detector uses only the pattern: the largest non-own-account credit each
+month, the median of those over the last 12 months as the reference, and "a salary
+month" means a credit within 30% of that reference. Salary detected = at least 5 such
+months in 12 or 4 in 6. `months_since_salary`, `salary_change_1m` and `payer_changed`
+(the payer key is the description with digits stripped) all derive from this, so they
+will work on a statement that never says "SALARY".
+
+### Three features and why each should predict churn
+
+- `months_since_salary`: income is the root of most silent churn. At the snapshot before
+  churn, planted income-stop churners sit at a median of 2 months, everyone else at 0.
+- `bal_change_vs_6m`: a balance at 21% of its own six-month average (planted drainers)
+  versus 1.1 to 1.2 for everyone else. Money leaving ahead of the customer.
+- `leak_share_trend`: the share of spending going to wallets and other banks rose by 15
+  points for planted leakage churners and 0 for others. The customer is already banking
+  elsewhere.
+
+### What I had to fix in the generator, and why it matters
+
+Building the label exposed three generator bugs that made silent churn invisible:
+the opening balance was drawn twice with different random numbers, the overdraft
+cushion was measured without the opening balance, and reversal credits and fee lines
+drifted the statement away from the plan. All three left a hidden floor under balances
+so they never fell to 20%. After the fixes, 91% of planted silent churners and 100% of
+planted closures are labelled at the snapshot before their churn date, and no customer
+who was not planted to churn is ever labelled 1. The 9% that are missed are mostly
+customers who keep shuffling money between their own accounts: by the definition they
+are not gone, and that is the right call.
+
+### What a data team might ask
+
+- *Why is the row-level churn rate 3%, not 10%?* 15% of customers churn across 24
+  months; each one is labelled 1 on the two or three snapshots whose 90-day window
+  contains the churn. That gives about 3% of customer-months, rising through the
+  period because planted churn cannot start before month 6.
+- *Why no feature for gender or age?* Rule 6. They are not in the table at all; the
+  fairness check in Phase 2 joins them back from the customers table.
+- *Why USD?* ZiG and USD balances must be comparable. One rate from `settings.yaml`
+  for now; the bank's own rate table can replace it.
+- *What about pyarrow and SHAP?* Both native libraries are blocked by Windows
+  Application Control on the build machine. Parquet goes through DuckDB. Phase 5 will
+  use LightGBM's built-in SHAP values instead of the shap package.
