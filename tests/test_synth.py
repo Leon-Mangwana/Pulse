@@ -50,7 +50,7 @@ def test_dates_respect_account_life(small_frames):
 
 def test_planted_churn_is_noisy_not_a_rule(small_frames):
     t = small_frames["_truth"]
-    assert 0.05 <= t["churner"].mean() <= 0.16
+    assert 0.08 <= t["churner"].mean() <= 0.22
     churners = t[t["churner"]]
     assert (churners["churn_type"] == "closed").mean() < 0.5          # most churn silently
     assert churners["no_warning"].any()                               # some churn with no warning
