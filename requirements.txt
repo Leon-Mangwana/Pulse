@@ -1,0 +1,22 @@
+# Pinned on 2026-11-17 against Python 3.11.9 (Windows). Change only on purpose.
+# core data
+numpy==2.4.6
+pandas==2.3.3
+pyarrow==26.0.1
+duckdb==2.0.0
+PyYAML==6.0.3
+# modelling
+scikit-learn==1.9.1
+scipy==1.17.1
+lightgbm==4.7.0
+lifelines==0.30.3
+shap==0.51.0
+# serving
+fastapi==0.163.1
+pydantic==2.14.3
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+# dashboard
+streamlit==1.67.0
+# tests
+pytest==9.2.0

@@ -1,0 +1,59 @@
+# Maps Pulse's canonical column names to the columns in the source files.
+#   canonical_name: source_column_name
+# This is the ONLY place source column names may appear. On hackathon day, point
+# `path` at the bank's files and edit the right-hand side of each mapping.
+#
+# Optional per file:
+#   date_format: strptime pattern used for every date column in that file
+#   values:      map raw category values to canonical ones, e.g. direction: {CR: credit, DR: debit}
+
+customers:
+  path: data/raw/customers.csv
+  date_format: "%Y-%m-%d"
+  columns:
+    customer_id: customer_id
+    open_date: open_date
+    segment: segment
+    branch: branch
+    gender: gender          # protected attribute: fairness check only, never a model input
+    age_band: age_band      # protected attribute: fairness check only, never a model input
+
+accounts:
+  path: data/raw/accounts.csv
+  date_format: "%Y-%m-%d"
+  columns:
+    account_id: account_id
+    customer_id: customer_id
+    product_type: product_type
+    currency: currency
+    open_date: open_date
+    close_date: close_date
+
+transactions:
+  path: data/raw/transactions.csv
+  date_format: "%Y-%m-%d"
+  columns:
+    txn_id: txn_id
+    account_id: account_id
+    customer_id: customer_id
+    txn_date: txn_date
+    amount: amount
+    direction: direction
+    currency: currency
+    channel: channel
+    counterparty_type: counterparty_type
+    description: description
+    balance_after: balance_after
+  values:
+    direction:
+      credit: credit
+      debit: debit
+
+products:
+  path: data/raw/products.csv
+  date_format: "%Y-%m-%d"
+  columns:
+    customer_id: customer_id
+    product: product
+    start_date: start_date
+    end_date: end_date

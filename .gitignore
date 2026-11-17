@@ -1,0 +1,20 @@
+# data and model artefacts are never committed
+data/
+models/*
+!models/.gitkeep
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# editors / os
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

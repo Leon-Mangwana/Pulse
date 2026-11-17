@@ -1,0 +1,29 @@
+# Project-wide knobs. Every assumption lives here so it can be changed without touching code.
+
+seed: 42                      # fixed random seed: same input must give the same output
+
+data:
+  start_date: 2024-11-01      # first day covered by the data (24 months to end_date)
+  end_date: 2026-10-31        # last day covered by the data
+  raw_dir: data/raw
+  processed_dir: data/processed
+  duckdb_path: data/processed/pulse.duckdb
+
+synth:                        # synthetic data generator (src/pulse/synth.py)
+  n_customers: 5000
+  churn_rate: 0.10            # share of customers who churn inside the window
+  closed_share_of_churn: 0.20 # of churners, share who formally close; the rest fade silently
+  no_warning_share_of_churn: 0.12   # churners who vanish with no warning signs at all
+  false_alarm_rate: 0.08      # non-churners who show warning signs and then recover
+  job_change_rate: 0.10       # salaried non-churners whose salary payer changes
+  lead_months_min: 2          # warning signs start 2 to 4 months before churn
+  lead_months_max: 4
+  savings_account_share: 0.30 # customers with a second (savings) account
+  zig_per_usd_start: 26.5     # ZiG per USD in the first month
+  zig_monthly_drift: 0.012    # ZiG weakens by this fraction per month
+  monthly_service_fee_usd: 3.0
+  segments:                   # mix of customer segments
+    salaried: 0.45
+    sme: 0.15
+    informal: 0.30
+    diaspora: 0.10
