@@ -5,9 +5,10 @@
     python -m pulse.cli pipeline    run every built step in order and print timings
 
     python -m pulse.cli features    build the snapshot table with features and churn label
-    python -m pulse.cli train       time split, three churn models, evaluation, fairness; saves models/
-
-Steps for later phases (score) are registered but not built yet.
+    python -m pulse.cli train       churn model (split, three models, evaluation, fairness), then the
+                                    time-to-churn model and the value-at-risk report; saves models/
+    python -m pulse.cli score       worklist at the latest snapshot: probability, value, value at risk,
+                                    urgency band; writes data/processed/worklist.parquet
 """
 from __future__ import annotations
 
@@ -38,8 +39,15 @@ def step_features():
 
 
 def step_train():
-    from pulse.models import churn
+    from pulse.models import churn, survival
     churn.main()
+    print(chr(10) + "=== time-to-churn and value at risk ===")
+    survival.main()
+
+
+def step_score():
+    from pulse import score
+    score.main()
 
 
 STEPS = {
@@ -47,10 +55,10 @@ STEPS = {
     "ingest": step_ingest,
     "features": step_features,
     "train": step_train,
-    "score": _not_built("score"),
+    "score": step_score,
 }
 # the pipeline never regenerates data: on hackathon day the raw folder holds the bank's files
-PIPELINE = ["ingest", "features", "train"]
+PIPELINE = ["ingest", "features", "train", "score"]
 
 
 def run_pipeline():

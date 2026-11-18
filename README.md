@@ -19,7 +19,8 @@ py -3.11 -m venv .venv
 | data | `python -m pulse.cli data` | generate synthetic bank data into `data/raw/` |
 | ingest | `python -m pulse.cli ingest` | load `data/raw/` through `config/schema.yaml` into DuckDB and print a data-quality report |
 | features | `python -m pulse.cli features` | build the snapshot table with 69 features and the churn label into `data/processed/features.parquet` |
-| train | `python -m pulse.cli train` | time split, rules / logistic / LightGBM comparison, calibration, sanity and fairness checks; saves `models/` |
+| train | `python -m pulse.cli train` | churn model (time split, rules / logistic / LightGBM, calibration, sanity and fairness checks), then the Cox time-to-churn model and the value-at-risk report; saves `models/` |
+| score | `python -m pulse.cli score` | worklist at the latest snapshot: probability, 12-month value, value at risk, rank, urgency band; writes `data/processed/worklist.parquet` (pseudonymised) and `id_map.parquet` |
 | pipeline | `python -m pulse.cli pipeline` | run every built step in order with timings |
 | tests | `python -m pytest` | run the test suite |
 

@@ -227,3 +227,92 @@ Diagnostics against `_truth.csv` (test block, never used by the pipeline): churn
 no warning sign score ROC-AUC 0.585, those with at least one sign 0.923; median lead between a
 row labelled 1 and the planted churn date 32 days; most planted churners are labelled 1 on
 three snapshots.
+
+## Phase 3: value at risk and time-to-churn
+
+### Run 2026-11-18, seed 42, 5,000 customers
+
+`python -m pulse.cli train` now also fits the Cox model and writes `models/value_report.md`
+(6 s on top of the churn model). `python -m pulse.cli score` writes
+`data/processed/worklist.parquet` and `id_map.parquet` in 3.4 s.
+
+Worklist at the latest snapshot (2026-10-31): 4,323 customers; total 12-month value
+1,035,344 USD; value at risk 22,374 USD (2.2%). Urgency bands: act this week 52, act this
+month 46, watch 4,225. Top 20 by value at risk: all with balance at 0 to 16% of its
+6-month average and transaction count down 50 to 90%; 11 SME, 5 salaried, 4 informal.
+
+Everything below is pasted from `models/value_report.md`, which the train step writes.
+
+
+**Cox coefficients (features standardised; exp(coef) is the hazard multiplier per standard deviation)**
+
+| feature | coef | exp(coef) | p | reading |
+| --- | --- | --- | --- | --- |
+| wallet_share_1m | 0.126 | 1.134 | 2.16e-08 | one standard deviation higher multiplies the rate of leaving by 1.13 |
+| leak_share_trend | 0.094 | 1.099 | 5.02e-05 | one standard deviation higher multiplies the rate of leaving by 1.10 |
+| months_since_salary | 0.017 | 1.017 | 0.468 | one standard deviation higher multiplies the rate of leaving by 1.02 |
+| net_flow_3m_usd | -0.089 | 0.915 | 0.00951 | one standard deviation higher multiplies the rate of leaving by 0.92 |
+| bal_slope_6m | -0.151 | 0.86 | 3.93e-06 | one standard deviation higher multiplies the rate of leaving by 0.86 |
+| income_change | -0.208 | 0.812 | 1.37e-12 | one standard deviation higher multiplies the rate of leaving by 0.81 |
+| txn_3m_vs_prior_3m | -0.215 | 0.807 | 2.22e-13 | one standard deviation higher multiplies the rate of leaving by 0.81 |
+| txn_count_change | -0.238 | 0.788 | 3.86e-15 | one standard deviation higher multiplies the rate of leaving by 0.79 |
+| bal_min_3m_ratio | -0.259 | 0.772 | 5.93e-17 | one standard deviation higher multiplies the rate of leaving by 0.77 |
+| bal_change_vs_6m | -0.27 | 0.764 | 5.22e-13 | one standard deviation higher multiplies the rate of leaving by 0.76 |
+
+**Concordance on the test block (chance = 0.5): who leaves first?**
+
+| ranking | concordance_test |
+| --- | --- |
+| Cox partial hazard | 0.848 |
+| LightGBM calibrated probability | 0.885 |
+
+**Test churners by when they left, and the Cox probabilities they were given**
+
+| churned | churners | mean_p30_% | mean_p90_% |
+| --- | --- | --- | --- |
+| within 30 days | 61 | 10.8 | 40.1 |
+| 31 to 60 days | 117 | 10.4 | 40.2 |
+| 61 to 92 days | 235 | 5.4 | 21.9 |
+
+**Urgency bands on the test block (thresholds in settings.yaml)**
+
+| band | rows | churned_within_90d_% | churned_within_30d_% | share_of_rows_% |
+| --- | --- | --- | --- | --- |
+| act this week | 121 | 76.0 | 16.5 | 0.9 |
+| act this month | 275 | 48.4 | 7.3 | 2.1 |
+| watch | 12418 | 1.5 | 0.2 | 96.9 |
+
+**Average 90-day probability versus the actual rate on the test block**
+
+| mean_cox_p90_% | mean_lightgbm_calibrated_% | actual_churn_% |
+| --- | --- | --- |
+| 2.92 | 3.33 | 3.22 |
+
+**12-month value on the test block, USD**
+
+| stat | fee_income_12m_usd | interest_margin_12m_usd | product_margin_12m_usd | value_12m_usd |
+| --- | --- | --- | --- | --- |
+| mean | 68.0 | 124.0 | 24.0 | 216.0 |
+| 50% | 54.0 | 78.0 | 6.0 | 156.0 |
+| 90% | 124.0 | 268.0 | 59.0 | 424.0 |
+| max | 365.0 | 1834.0 | 291.0 | 2058.0 |
+
+**Call-list comparison on the test block: 12-month value of customers who actually churned (total 81,894 USD across 413 churners)**
+
+| ordering | top_% | contacted | churned_value_reached_usd | share_of_churned_value_% | churners_reached_% |
+| --- | --- | --- | --- | --- | --- |
+| random | 5 | 640 | 4590 | 5.6 | 6.3 |
+| random | 10 | 1281 | 8971 | 11.0 | 11.9 |
+| random | 20 | 2562 | 15870 | 19.4 | 23.2 |
+| by churn probability | 5 | 640 | 48749 | 59.5 | 63.9 |
+| by churn probability | 10 | 1281 | 55282 | 67.5 | 71.7 |
+| by churn probability | 20 | 2562 | 60211 | 73.5 | 78.2 |
+| by value at risk | 5 | 640 | 52882 | 64.6 | 64.4 |
+| by value at risk | 10 | 1281 | 57958 | 70.8 | 70.7 |
+| by value at risk | 20 | 2562 | 68183 | 83.3 | 78.5 |
+
+`python -m pulse.cli pipeline`: ingest 19.5 s, features 29.1 s, train 31.3 s, score 0.9 s, total 80.8 s.
+
+`python -m pytest`: 31 passed (26 from earlier phases, plus value components and floor,
+pseudonymisation, value-at-risk ordering beats random, survival probabilities ordered and bands
+cover everyone, worklist has one row per customer with no raw id).
