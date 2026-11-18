@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pulse import score
+from pulse import crosssell, score
 from pulse.config import load_settings
 from pulse.features.build import build_features
 from pulse.models import churn
@@ -37,6 +37,7 @@ def models_dir(feats, products, settings, small_frames, tmp_path_factory):
     attrs = small_frames["customers"][["customer_id"] + churn.PROTECTED]
     churn.train(feats, settings, attrs=attrs, out_dir=d, log=lambda *_: None)
     train_survival(feats, products, settings, d, log=lambda *_: None)
+    crosssell.train_propensity(feats, products, settings, d, log=lambda *_: None)   # the worklist needs it since Phase 4
     return d
 
 
