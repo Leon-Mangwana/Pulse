@@ -18,6 +18,7 @@ from pulse.config import PROJECT_ROOT, load_settings, resolve
 from pulse.io import read_parquet, write_parquet
 from pulse.models import churn
 from pulse.models.survival import load_products, urgency_band
+from pulse import crosssell
 from pulse.pseudo import id_map, pseudonymise
 from pulse.value import compute_value
 
@@ -35,6 +36,10 @@ WORKLIST_COLUMNS = {
     "p_churn_30d": "Cox probability of churn within 30 days", "p_churn_60d": "within 60 days",
     "p_churn_90d_cox": "within 90 days (Cox; the calibrated LightGBM figure is the one to quote)",
     "urgency": "act this week / act this month / watch",
+    "recommendation": "next best product, or 'retention' for the top decile of value at risk",
+    "rec_score": "calibrated 90-day uptake probability when a model exists, else the rule's observed uptake rate",
+    "rec_reason": "fixed template filled with the customer's own numbers (config/crosssell.yaml)",
+    "rec_source": "rule, rule+model, model, fallback or retention",
     **{f: "why: see docs/features.md" for f in WHY_FEATURES},
 }
 
@@ -67,6 +72,9 @@ def build_worklist(feats: pd.DataFrame, products: pd.DataFrame, settings: dict, 
     out["p_churn_60d"] = probs["p_churn_60d"].to_numpy()
     out["p_churn_90d_cox"] = probs["p_churn_90d"].to_numpy()
     out["urgency"] = urgency_band(probs, settings["survival"])
+    rec = crosssell.recommend(rows, products, settings, model_dir, value_at_risk=out["value_at_risk_usd"].to_numpy())
+    for c in rec.columns:
+        out[c] = rec[c].to_numpy()
     for f in WHY_FEATURES:
         out[f] = rows[f].to_numpy()
     out = out.sort_values("rank").reset_index(drop=True)
@@ -89,7 +97,9 @@ def main(root: Path = PROJECT_ROOT) -> pd.DataFrame:
           f"total value at risk {worklist['value_at_risk_usd'].sum():,.0f} USD "
           f"of {worklist['value_12m_usd'].sum():,.0f} USD 12-month value")
     print("\nurgency bands\n" + worklist["urgency"].value_counts().reindex(["act this week", "act this month", "watch"]).to_string())
-    show = ["rank", "customer_ref", "segment", "urgency", "p_churn_90d", "value_12m_usd", "value_at_risk_usd"] + WHY_FEATURES
+    print("\nrecommendations by source\n" + worklist.groupby(["rec_source", "recommendation"]).size().to_string())
+    show = ["rank", "customer_ref", "segment", "urgency", "p_churn_90d", "value_12m_usd", "value_at_risk_usd",
+            "recommendation", "rec_source"] + WHY_FEATURES
     top = worklist[show].head(20).copy()
     for c in ["p_churn_90d"] + WHY_FEATURES:
         top[c] = top[c].round(2)
