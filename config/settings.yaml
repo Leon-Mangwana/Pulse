@@ -75,3 +75,35 @@ model:                        # churn model (src/pulse/models/churn.py)
       - {num_leaves: 7, min_child_samples: 200, feature_fraction: 0.7, lambda_l2: 10.0}
       - {num_leaves: 4, min_child_samples: 300, feature_fraction: 0.6, lambda_l2: 10.0}
       - {num_leaves: 7, min_child_samples: 300, feature_fraction: 0.5, lambda_l2: 30.0, learning_rate: 0.02}
+
+value:                        # expected 12-month value to the bank, USD (src/pulse/value.py)
+  fee_annualisation: 4        # 12-month fee income = fees paid in the last 3 months x 4
+  interest_margin_usd: 0.05   # net interest margin the bank earns per year on USD balances (5%)
+  interest_margin_zig: 0.08   # the same on ZiG balances (8%): higher nominal rates, higher spread
+  product_margin_usd:         # yearly margin per product held at the snapshot date, USD
+    transactional_account: 0  # 0 because its value is already counted through fees and balances
+    mobile_banking: 6
+    savings_account: 15
+    education_savings: 15
+    fx_savings: 25
+    fixed_deposit: 40
+    personal_loan: 120
+    sme_package: 150
+  min_value_usd: 1.0          # floor so an active customer never has exactly zero value at risk
+
+pseudonymise:                 # customer ids are replaced before anything reaches a dashboard or log
+  salt: "pulse-2026-bancabc"  # change this before the real data arrives
+  length: 10                  # hex characters kept from the hash
+
+survival:                     # time-to-churn, Cox proportional hazards (src/pulse/models/survival.py)
+  features: [bal_change_vs_6m, bal_slope_6m, bal_min_3m_ratio, income_change, net_flow_3m_usd,
+             wallet_share_1m, txn_3m_vs_prior_3m, txn_count_change, months_since_salary, leak_share_trend]
+  penalizer: 0.01             # small ridge penalty for a stable fit
+  clip_percentiles: [1, 99]   # winsorise at these train-set percentiles before standardising
+  horizons_days: [30, 60, 90]
+  bands:                      # urgency from the Cox probabilities
+    act_this_week_p30: 0.15   # "act this week" if P(churn within 30 days) is at or above this
+    act_this_month_p90: 0.15  # else "act this month" if P(churn within 90 days) is at or above this; else "watch"
+
+worklist:
+  top_shares: [0.05, 0.10, 0.20]   # call-list sizes compared in the value-at-risk report
