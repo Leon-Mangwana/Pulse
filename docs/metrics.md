@@ -316,3 +316,50 @@ Everything below is pasted from `models/value_report.md`, which the train step w
 `python -m pytest`: 31 passed (26 from earlier phases, plus value components and floor,
 pseudonymisation, value-at-risk ordering beats random, survival probabilities ordered and bands
 cover everyone, worklist has one row per customer with no raw id).
+
+## Phase 4: cross-sell engine
+
+### Run 2026-11-18, seed 42, 5,000 customers
+
+`python -m pulse.cli train` now also fits one propensity model per product and writes
+`models/crosssell_report.md` (45 s on top of the churn and survival models).
+`python -m pulse.cli score` adds recommendation, rec_score, rec_reason and rec_source to the
+worklist.
+
+Worklist at 2026-10-31, 4,323 customers, recommendations by source: retention 432,
+rule+model 1,455, rule 337, model 483, fallback 1,616, none 0.
+
+First run, before the validation gate (kept for the record): the fixed_deposit and
+personal_loan models scored ROC-AUC 0.537 and 0.441 on the test block, chance or worse,
+with validation ROC-AUC 0.63 and 0.55. A gate of 0.65 on the validation block now drops
+them to rule only. Everything below is after that gate.
+
+Everything below is pasted from `models/crosssell_report.md`, which the train step writes.
+
+
+**Propensity models per product (test block; rule only where uptakes are too few)**
+
+| product | train_rows | train_positives | status | PR-AUC | ROC-AUC | capture@10% | lift@10% |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| education_savings | 27127 | 506 | model (99 rounds, 2s) | 0.047 | 0.768 | 27.3 | 2.73 |
+| fixed_deposit | 27443 | 201 | rule only (no signal: validation ROC-AUC 0.63) |  |  |  |  |
+| fx_savings | 27230 | 386 | model (147 rounds, 2s) | 0.074 | 0.807 | 60.8 | 6.08 |
+| mobile_banking | 11465 | 219 | model (53 rounds, 1s) | 0.186 | 0.917 | 52.1 | 5.21 |
+| personal_loan | 26370 | 334 | rule only (no signal: validation ROC-AUC 0.55) |  |  |  |  |
+| savings_account | 20068 | 117 | model (520 rounds, 5s) | 0.13 | 0.886 | 40.4 | 4.04 |
+| sme_package | 27354 | 293 | model (221 rounds, 4s) | 0.046 | 0.766 | 49.7 | 4.97 |
+
+**Triggers: fires at the latest snapshot (2026-10-31) and 90-day uptake on the test block**
+
+| trigger | product | fires_latest | fires_latest_% | test_triggered | uptake_triggered_% | uptake_untriggered_% | lift |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| diaspora_remittances | fx_savings | 367 | 8.5 | 1236 | 7.36 | 0.53 | 13.9 |
+| school_fees | education_savings | 932 | 21.6 | 2989 | 5.45 | 0.6 | 9.1 |
+| supplier_payments | sme_package | 600 | 13.9 | 1992 | 5.12 | 0.42 | 12.2 |
+| rising_salary_idle_balance | fixed_deposit | 590 | 13.6 | 1627 | 1.6 | 0.46 | 3.5 |
+
+`python -m pulse.cli pipeline`: ingest 21.9 s, features 42.0 s, train 77.1 s, score 13.2 s, total 154 s.
+
+`python -m pytest`: 36 passed (31 from earlier phases, plus trigger fires and skips held products,
+a new trigger from YAML alone, unknown operator rejected, every customer gets an action and the
+guardrail wins, triggered customers take up more on the test block).
