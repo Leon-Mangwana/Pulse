@@ -119,7 +119,7 @@ shares, and with 1 for change ratios.
 
 | column | meaning |
 | --- | --- |
-| churn_90d | 1 if the customer closed or went silent in the 90 days after the snapshot (empty when the 90 days are not yet over) |
-| churn_type | hard (account closed), silent (activity and balance collapsed), or none |
-| days_to_churn | days from the snapshot to the closure or to the end of the first silent month; empty if no churn |
-| labelled | 1 if a full 90 days of data follow the snapshot, so the label is known |
+| churn_90d | 1 if the customer closed or went quiet in the 90 days after the snapshot (empty when the window is not yet observable) |
+| churn_type | hard (account closed), silent (activity and balance collapsed for two months), or none |
+| days_to_churn | days from the snapshot to the closure or to the end of the first quiet month; empty if no churn |
+| labelled | 1 if the full window (plus the confirming month) is inside the data, so the label is known |
