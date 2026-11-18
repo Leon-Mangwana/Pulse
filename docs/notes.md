@@ -122,25 +122,34 @@ is byte-for-byte unchanged, while the labels do change.
 3. `target.py` computes the label the same way, looking only right.
 4. `features/build.py` picks the eligible cells and writes one row each.
 
-### The churn label, exactly
+### The churn label, exactly (corrected in Phase 2, see below)
 
 `churn_90d = 1` when, in the 90 days after the snapshot, the customer either
 
 - **hard churn**: an account close date falls inside the window, or
-- **silent churn**: their customer-initiated transactions per month (bank fee lines do
-  not count) AND their average month-end balance over the next three calendar months
-  both fall below 20% of their own average over the six months up to the snapshot.
+- **silent churn**: the customer goes quiet within the next three calendar months. "Quiet"
+  is an event with a month, E: the first month in which customer-initiated transactions
+  (bank fee lines do not count) AND the month-end balance both fall below 20% of the
+  customer's own average over the six months before E, and stay below it the following
+  month too (one quiet month alone could be a holiday).
 
 The 20%, 90 days and 6 months live in `settings.yaml` under `target`. Silent churn uses
 three calendar months (89 to 92 days) because activity is aggregated monthly; hard churn
 uses exact days. `days_to_churn` is exact for closures and the end of the first quiet
-month for silent churn.
+month E for silent churn. Because the quiet month needs one more month to confirm it,
+the last labelled snapshot is four months before the end of the data.
 
 Rows are dropped when the customer has under six months of data, has already closed,
 has fewer than three customer-initiated transactions in the previous three months
-(already inactive: predicting churn for them is trivial and useless), or when fewer
-than 90 days of data follow (those rows keep their features for scoring but have an
+(already inactive: predicting churn for them is trivial and useless), is at or past
+their quiet month E (already churned: nothing left to predict), or when the label
+window is not yet observable (those rows keep their features for scoring but have an
 empty label and `labelled = 0`).
+
+The first version of this label (Phase 1) compared the *average* of the next three
+months with the baseline and had no "already churned" exclusion. That let the label
+keep firing for two or three snapshots after a customer had gone, so a model could
+"predict" churn that had already happened. Phase 2 found it; details there.
 
 ### Salary without labels
 
@@ -175,10 +184,10 @@ are not gone, and that is the right call.
 
 ### What a data team might ask
 
-- *Why is the row-level churn rate 3%, not 10%?* 15% of customers churn across 24
-  months; each one is labelled 1 on the two or three snapshots whose 90-day window
-  contains the churn. That gives about 3% of customer-months, rising through the
-  period because planted churn cannot start before month 6.
+- *Why is the row-level churn rate 3%, not 15%?* 15% of customers churn across 24
+  months; each one is labelled 1 on the three snapshots whose 90-day window contains
+  the churn, and never after it. That gives about 3% of customer-months, rising through
+  the period because planted churn cannot start before month 6.
 - *Why no feature for gender or age?* Rule 6. They are not in the table at all; the
   fairness check in Phase 2 joins them back from the customers table.
 - *Why USD?* ZiG and USD balances must be comparable. One rate from `settings.yaml`
@@ -186,3 +195,115 @@ are not gone, and that is the right call.
 - *What about pyarrow and SHAP?* Both native libraries are blocked by Windows
   Application Control on the build machine. Parquet goes through DuckDB. Phase 5 will
   use LightGBM's built-in SHAP values instead of the shap package.
+
+## Phase 2: churn model and honest evaluation (18 Nov 2026)
+
+### The three ideas, in plain words
+
+**PR-AUC.** Only 3 in 100 customer-months are churn. A model that says "nobody churns"
+is 97% accurate and useless, so accuracy is never quoted. PR-AUC asks instead: as you
+walk down the list from the riskiest customer, how pure is the top of the list (precision)
+and how many of all the churners have you reached (recall)? It averages precision over
+every level of recall. A random ranking scores the churn rate itself (0.03); 1.0 is perfect.
+It rewards getting the rare churners to the top, which is the only thing we care about.
+
+**Capture and lift at the top 10%.** The bank cannot call everyone. If it calls the 10%
+the model ranks riskiest, capture is the share of all real churners it reaches; lift is
+capture divided by 10%, so lift 7 means seven times better than calling at random.
+This is the number for the pitch because it matches what a branch can actually do.
+
+**Calibration.** A score of 0.30 should mean that about 30 in 100 such customers churn.
+Phase 3 multiplies the probability by the customer's expected value in dollars, so an
+inflated probability is inflated money. The model is trained with churners weighted up
+(class weights), which deliberately inflates its raw scores; an isotonic calibrator fitted
+on the validation block maps raw scores back to honest rates. The calibration table
+checks it: rows sorted by score, cut into ten equal groups, predicted versus actual.
+
+### What the first run taught us: a label bug, not leakage
+
+The first training run gave ROC-AUC 0.952 and the hand-written rules alone captured 88%
+of churners in the top 10%. Per the rules in CLAUDE.md that is a reason to investigate,
+not celebrate. The leakage test still passed, so features were clean. Joining test
+predictions to `_truth.csv` (diagnostics only) showed the real cause: half of all rows
+labelled 1 were dated *after* the planted churn date. The Phase 1 label compared the
+average of the next three months with the customer's baseline, and once a customer had
+gone quiet the label kept firing for two or three more snapshots, because the six-month
+baseline still remembered the good months. The model was "predicting" churn that had
+already happened, which is why a single balance feature carried half of the signal.
+
+The fix (`src/pulse/target.py`): churn is an event with a month E, the first of two
+consecutive quiet months; a snapshot is labelled 1 if E falls inside its 90-day window;
+snapshots at or after E are excluded, exactly as already-inactive customers are. After
+the fix the median lead between a labelled row and the planted churn date is 32 days,
+churners planted with no warning sign score near chance (0.585), and no single feature
+exceeds 0.81 alone. Those are the signs of an honest problem.
+
+### The split
+
+| block | snapshots | rows | churn |
+| --- | --- | --- | --- |
+| train | 2025-04-30 to 2025-10-31 (7) | 27,646 | 2.5% |
+| validation | 2025-11-30 to 2026-01-31 (3) | 12,360 | 2.9% |
+| gap | 2026-02-28, 2026-03-31 | dropped | |
+| test | 2026-04-30 to 2026-06-30 (3) | 12,814 | 3.2% |
+
+The gap exists because a snapshot's label looks three months ahead: a row dated 31 March
+knows April to June, which is the test period. Dropping those two months means nothing
+the model was fitted on overlaps what it is judged on. The same customer can appear in
+train and test at different dates; that is how the bank will use it.
+
+### The three models
+
+- **Rules**: count of four flags (salary gone two months, balance under half its
+  average, transactions under half, wallet and other-bank share up 15 points). A branch
+  manager could run it in Excel; the model must beat it to earn its keep.
+- **Logistic regression**: one weight per feature, features clipped at the 1st and 99th
+  percentile and standardised, churners weighted up.
+- **LightGBM**: many small trees, each correcting the last. Four fixed candidate settings
+  were fitted with early stopping on the validation block; the least overfit one within
+  0.01 of the best validation PR-AUC was kept (7 leaves, 200 rows per leaf, 159 rounds).
+  The test block was scored once, after that choice.
+
+### Results on the test block
+
+| model | PR-AUC | ROC-AUC | capture@10% | lift@10% |
+| --- | --- | --- | --- | --- |
+| rules | 0.437 | 0.844 | 67.3% | 6.7 |
+| logistic | 0.450 | 0.856 | 68.3% | 6.8 |
+| LightGBM | 0.512 | 0.875 | 71.7% | 7.2 |
+
+Calibration: raw LightGBM scores average 24% against a true rate of 3.2%; after the
+isotonic calibrator the average is 3.3% and the expected calibration error is 0.003.
+The riskiest decile is predicted at 24.3% and churns at 23.1%.
+
+Sanity checks: no single feature above 0.9 alone (highest 0.81). Train versus test
+PR-AUC is 0.624 versus 0.512, a gap of 0.11, just over the 0.10 warning line; the more
+flexible candidate had a gap of 0.26 for the same test score, which is why the simpler
+one was kept. Top features: balance versus its six-month average, balance slope,
+lowest recent balance, income change, net flow, wallet share, transaction trend. Balance
+first, then income, then wallet leakage: the order the proposal predicted.
+
+Fairness at the top-10% cut: flag rates by gender are 10.0% and 10.0%; capture 75% (F)
+versus 69% (M). Across age bands the flag rate follows each band's churn rate (7% for
+55 to 64, who churn least, up to 10.8% for 45 to 54) and capture ranges from 66% to
+78%. Nothing is flagged disproportionately to its churn rate. Gender and age band were
+joined after scoring and are not in the feature list; a test asserts it.
+
+### The sentence for a banker
+
+"Calling the riskiest 10% of customers reaches 72% of those who actually leave in the
+next 90 days, seven times better than calling at random." Say it with the caveat that
+this is synthetic data built to contain warning signs; the real figure comes from the
+bank's own history on the day.
+
+### What a data team might ask
+
+- *Why did the rules baseline do so well?* The synthetic churners carry planted signs
+  that the rules were written to catch. On real data the rules will fall further behind;
+  LightGBM's advantage comes from combining weak signs, which is what real churn needs.
+- *Why is PR-AUC only 0.51 if ROC-AUC is 0.88?* With 3% positives, PR-AUC is the harder
+  score; 0.51 against a random baseline of 0.03 is strong. Quote capture, not PR-AUC.
+- *Why not more tuning?* Four candidates differed by 0.016 in validation PR-AUC. More
+  search would chase noise on 364 validation churners.
+- *Why calibrate on validation, not test?* The test block is scored once, after every
+  choice has been made, so its numbers are what the bank would see next quarter.

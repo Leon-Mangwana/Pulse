@@ -43,3 +43,35 @@ features:                     # feature families (src/pulse/features/)
   cap_months: 12              # months-since counters are capped here
   salary_tolerance: 0.30      # a credit within +-30% of the reference amount counts as the same salary
   salary_min_usd: 50          # ignore "salaries" smaller than this
+
+model:                        # churn model (src/pulse/models/churn.py)
+  split:                      # time-based split on snapshot_date; never random
+    train_end: 2025-10-31     # last training snapshot
+    valid_end: 2026-01-31     # last validation snapshot (early stopping + calibration)
+    test_start: 2026-04-30    # first test snapshot; must be >= valid_end + 3 months (the label
+                              # horizon) so no train/valid label window overlaps the test period
+  top_shares: [0.05, 0.10, 0.20]   # "call the riskiest X%" cut-offs reported
+  calibration_bins: 10
+  leakage_auc_warning: 0.90   # a single feature with ROC-AUC above this is flagged
+  overfit_gap_warning: 0.10   # train minus test PR-AUC above this is flagged
+  rules:                      # rules baseline: count how many of these flags fire
+    no_salary_months: 2       # salary detected but none for this many months
+    balance_drop: 0.5         # balance below this share of its 6-month average
+    activity_drop: 0.5        # transaction count below this share of its 6-month average
+    leak_rise: 0.15           # wallet + other-bank share of outflows up by this many points
+  logistic:
+    C: 1.0                    # inverse regularisation strength
+    clip_percentiles: [1, 99] # winsorise features at these train-set percentiles
+  lightgbm:                   # base settings; each candidate below overrides a few of them
+    learning_rate: 0.03
+    bagging_fraction: 0.8
+    bagging_freq: 1
+    max_rounds: 2000
+    early_stopping_rounds: 100
+    simpler_tolerance: 0.01   # among candidates within this of the best validation PR-AUC, keep the
+                              # one with the smallest train-minus-validation gap (least overfit)
+    candidates:               # small, fixed set, judged on the VALIDATION block only
+      - {num_leaves: 15, min_child_samples: 100, feature_fraction: 0.8, lambda_l2: 1.0}
+      - {num_leaves: 7, min_child_samples: 200, feature_fraction: 0.7, lambda_l2: 10.0}
+      - {num_leaves: 4, min_child_samples: 300, feature_fraction: 0.6, lambda_l2: 10.0}
+      - {num_leaves: 7, min_child_samples: 300, feature_fraction: 0.5, lambda_l2: 30.0, learning_rate: 0.02}

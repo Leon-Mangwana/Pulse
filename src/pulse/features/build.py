@@ -48,7 +48,8 @@ def build_features(tx: pd.DataFrame, accounts: pd.DataFrame, customers: pd.DataF
     history = mm - np.maximum(mt.open_m, 0)[:, None] + 1
     eligible = mt.exists & (history >= tcfg["min_history_months"])
     if not keep_inactive:
-        eligible &= ~target.already_inactive(mt, tcfg)
+        eligible &= ~target.already_inactive(mt, tcfg)   # trivial to predict, useless to act on
+        eligible &= ~target.already_churned(mt, tcfg)    # already gone: nothing left to predict
     ci, mi = np.nonzero(eligible)
 
     cust = customers.reset_index(drop=True)
