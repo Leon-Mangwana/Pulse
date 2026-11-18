@@ -307,3 +307,101 @@ bank's own history on the day.
   search would chase noise on 364 validation churners.
 - *Why calibrate on validation, not test?* The test block is scored once, after every
   choice has been made, so its numbers are what the bank would see next quarter.
+
+## Phase 3: value at risk and time-to-churn (18 Nov 2026)
+
+### Censoring and Cox, in everyday terms
+
+Watch a bus stop for 90 minutes. Some people board a bus, and you know exactly when.
+When you leave, others are still waiting: you only know they waited more than 90 minutes.
+Those people are censored. Dropping them says "everyone leaves within 90 minutes";
+counting them as leaving at minute 90 says they left when they did not. A survival model
+keeps them in, using only the fact that they lasted at least 90 minutes. A Cox model then
+asks, for each trait, how much it multiplies the rate of leaving at any moment: "a
+customer whose balance has halved leaves at a higher rate than one whose balance is
+steady, at every point in time". The shape of the timing curve comes from the data; the
+traits scale it up or down. For us the clock starts at the snapshot, the event is churn at
+`days_to_churn`, and anyone still here at 90 days is censored at 90.
+
+### Value: three lines of arithmetic, every number in settings.yaml
+
+`value_12m_usd` = fees paid in the last 3 months x 4, plus the 6-month average balance x
+a yearly net interest margin (5% on USD, 8% on ZiG, blended by the customer's USD share),
+plus a yearly margin per product held at the snapshot date (loan 120, SME package 150,
+fixed deposit 40, foreign-currency savings 25, savings 15, mobile banking 6, transactional
+account 0 because its value is already in fees and balances). Floored at 1 USD. On the
+test block the median customer is worth 156 USD a year, the top 10% over 424 USD.
+
+These are placeholders for finance to replace. The code reads them from `settings.yaml`
+under `value`; nothing else needs to change. Products the data mentions but the settings
+do not are counted as 0 and listed in a warning.
+
+### Value at risk and the worklist
+
+`value_at_risk_usd` = calibrated 90-day churn probability (Phase 2) x 12-month value.
+`python -m pulse.cli score` writes `data/processed/worklist.parquet`: one row per customer
+at the latest snapshot (31 Oct 2026, 4,323 customers) with the probability, the value and
+its three parts, value at risk, rank, the Cox 30/60/90-day probabilities, the urgency band
+and four "why" features. Customer ids are replaced by a salted hash (`pulse/pseudo.py`);
+the mapping back is in `id_map.parquet`, which the API and dashboard never read.
+
+Total value at risk at the latest snapshot: 22,374 USD of 1,035,344 USD annual value
+(2.2%). The top 20 are SMEs and salaried customers worth 160 to 840 USD a year whose
+balance is at 0 to 16% of its 6-month average and whose transaction count is down 50 to
+90%: valuable and clearly slipping, which is the test the plan set.
+
+### Time-to-churn: what the Cox model adds, and what it does not
+
+Fitted on the train and validation blocks together (40,006 rows, 1,067 events) on ten of
+the strongest Phase 2 features, clipped and standardised, with a small ridge penalty.
+Every coefficient points the expected way: balance versus its 6-month average, lowest
+recent balance, transaction change and income change all lower the rate of leaving when
+higher; wallet share and leakage trend raise it. Months since salary is not significant
+once the balance and income features are in.
+
+Concordance on the test block (chance 0.5): Cox 0.848, the LightGBM probability 0.885.
+**The survival model ranks customers slightly worse than the churn score, so it adds
+little for ranking.** What it adds is a time axis: a probability of churn within 30, 60
+and 90 days, and the urgency band built from them. One honesty note: under proportional
+hazards every customer shares the same curve shape, so the 30-day and 90-day
+probabilities rank customers identically. The band is a risk tier expressed in days, not
+an independent prediction of timing. The check that it still means something: test
+churners who left within 30 days had a mean 30-day probability of 10.8%, those who left in
+days 61 to 92 had 5.4%. Higher risk does mean sooner, roughly.
+
+Bands on the test block, thresholds from `settings.yaml`: "act this week" (30-day
+probability at or above 15%) is 0.9% of rows and 76% of them churned within 90 days;
+"act this month" (90-day probability at or above 15%) is 2.1% of rows and 48% churned;
+"watch" is the rest, 1.5% churned. The Cox 90-day probability averages 2.9% against an
+actual 3.2%, so it is roughly calibrated on its own, but the LightGBM figure is the one to
+quote and the one used for value at risk.
+
+### The slide: three ways to order the call list (test block)
+
+12-month value of the customers who actually churned, reached by contacting the top
+share of the list. Total at stake: 81,894 USD across 413 churners.
+
+| ordering | top 5% | top 10% | top 20% |
+| --- | --- | --- | --- |
+| random | 5.6% | 11.0% | 19.4% |
+| by churn probability | 59.5% | 67.5% | 73.5% |
+| by value at risk | 64.6% | 70.8% | 83.3% |
+
+Value at risk reaches more dollars at every list size while reaching almost exactly the
+same number of churners (64% versus 64% at 5%, 71% versus 72% at 10%). It trades a few
+low-value churners for high-value ones. That is the whole argument for multiplying by
+dollars.
+
+### What a data team might ask
+
+- *Is a 5% net interest margin right?* It is an assumption with a comment next to it. The
+  point is that the worklist re-sorts itself when finance changes the number.
+- *Why not use the Cox probability for value at risk?* The LightGBM probability is better
+  ranked (0.885 versus 0.848) and was calibrated on held-out data; the Cox model is kept
+  for the time axis only. If a judge asks whether the survival model earns its place: for
+  ranking, no; for "this week or this month", yes, modestly.
+- *Why can a probability be exactly 1.00 on the worklist?* The isotonic calibrator is a
+  step function; its top step is the validation bin where every customer churned. On real
+  data with more noise the top step will sit below 1.
+- *Why is value at risk only 2.2% of annual value?* Because 3% of customers churn in a
+  quarter. The figure is a quarter's exposure, not a year's.
