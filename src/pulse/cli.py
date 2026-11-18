@@ -8,7 +8,8 @@
     python -m pulse.cli train       churn model (split, three models, evaluation, fairness), then the
                                     time-to-churn model and the value-at-risk report; saves models/
     python -m pulse.cli score       worklist at the latest snapshot: probability, value, value at risk,
-                                    urgency band; writes data/processed/worklist.parquet
+                                    urgency band, next best product or retention action; writes
+                                    data/processed/worklist.parquet
 """
 from __future__ import annotations
 
@@ -43,6 +44,9 @@ def step_train():
     churn.main()
     print(chr(10) + "=== time-to-churn and value at risk ===")
     survival.main()
+    from pulse import crosssell
+    print(chr(10) + "=== cross-sell: propensity models and trigger report ===")
+    crosssell.main()
 
 
 def step_score():
