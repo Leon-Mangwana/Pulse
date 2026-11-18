@@ -1,0 +1,65 @@
+# Cross-sell triggers and templates. Adding a trigger means adding a block here; no code changes.
+#
+# A trigger fires when EVERY condition holds. A condition is [feature, operator, value] where the
+# feature is any column of docs/features.md and the operator is one of >=, >, <=, <, ==, !=.
+# A product the customer already holds at the snapshot date is never offered.
+# `reason` is a fixed template: {feature} placeholders are filled with the customer's own values
+# (format specs such as :,.0f work). Nothing else is ever generated.
+
+triggers:
+  - name: diaspora_remittances
+    product: fx_savings
+    priority: 1
+    conditions:
+      - [remit_regular, ">=", 1]
+      - [remit_amount_3m_usd, ">=", 150]
+    reason: "Remittances arrived in {remit_months_6m:.0f} of the last 6 months ({remit_amount_3m_usd:,.0f} USD in the last 3). A foreign-currency savings account keeps that money earning in hard currency."
+
+  - name: school_fees
+    product: education_savings
+    priority: 2
+    conditions:
+      - [school_terms_12m, ">=", 2]
+    reason: "School fees paid in {school_terms_12m:.0f} of the last 12 months ({school_amount_12m_usd:,.0f} USD). An education savings plan spreads next term's fees across the months."
+
+  - name: supplier_payments
+    product: sme_package
+    priority: 3
+    conditions:
+      - [supplier_regular, ">=", 1]
+    reason: "Suppliers paid in {supplier_months_6m:.0f} of the last 6 months ({supplier_amount_3m_usd:,.0f} USD in the last 3). The SME package bundles bulk payments with lower transfer fees."
+
+  - name: rising_salary_idle_balance
+    product: fixed_deposit
+    priority: 4
+    conditions:
+      - [salary_rising, ">=", 1]
+      - [bal_avg_3m_usd, ">=", 1500]
+      - [net_flow_3m_usd, ">", 0]
+    reason: "Salary-sized credit is {salary_growth_6m:.2f}x what it was six months ago and the balance averages {bal_avg_3m_usd:,.0f} USD with money left over each month. A fixed deposit earns interest on cash that is not being spent."
+
+# Reason shown when a propensity model, not a rule, picks the product. {score} is the model's
+# calibrated probability of uptake in the next 90 days.
+model_reasons:
+  fx_savings: "Banking pattern resembles customers who opened foreign-currency savings (model: {score:.0%} chance of uptake in 90 days)."
+  education_savings: "Banking pattern resembles customers who opened an education savings plan (model: {score:.0%} chance of uptake in 90 days)."
+  sme_package: "Banking pattern resembles customers who took the SME package (model: {score:.0%} chance of uptake in 90 days)."
+  fixed_deposit: "Banking pattern resembles customers who opened a fixed deposit (model: {score:.0%} chance of uptake in 90 days)."
+  personal_loan: "Banking pattern resembles customers who took a personal loan (model: {score:.0%} chance of uptake in 90 days)."
+  savings_account: "Banking pattern resembles customers who opened a savings account (model: {score:.0%} chance of uptake in 90 days)."
+  mobile_banking: "Banking pattern resembles customers who signed up for mobile banking (model: {score:.0%} chance of uptake in 90 days)."
+
+# When no trigger fires and no model is confident: the first product not already held.
+fallback:
+  - product: mobile_banking
+    reason: "Not yet on mobile banking. The app replaces branch and USSD fees for everyday payments."
+  - product: savings_account
+    reason: "No savings account yet. A separate account makes saving a habit and earns interest."
+  - product: fixed_deposit
+    reason: "Already on mobile banking with a savings account. A fixed deposit earns a higher rate on money not needed this quarter."
+  - product: fx_savings
+    reason: "Holds the everyday products already. A foreign-currency savings account protects savings against ZiG movements."
+
+# Guardrail: customers in the top decile of value at risk get this instead of any offer.
+retention:
+  action: "Retention call, not a sales offer: {value_at_risk_usd:,.0f} USD of annual value at risk. Ask what changed, review fees, confirm the salary or remittance still lands here."

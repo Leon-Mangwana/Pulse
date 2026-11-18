@@ -107,3 +107,15 @@ survival:                     # time-to-churn, Cox proportional hazards (src/pul
 
 worklist:
   top_shares: [0.05, 0.10, 0.20]   # call-list sizes compared in the value-at-risk report
+
+crosssell:                    # next best product (src/pulse/crosssell.py); the rules live in crosssell.yaml
+  rules_path: config/crosssell.yaml
+  horizon_days: 90            # uptake label: product started within this many days after the snapshot
+  skip_products: [transactional_account]   # never modelled or offered (everyone has one)
+  min_train_positives: 100    # a product with fewer uptake rows in the training block gets no model, rule only
+  min_valid_roc_auc: 0.65     # a model below this ROC-AUC on the VALIDATION block is dropped (rule only). Higher
+                              # than 'beats chance' because early stopping on that block inflates its score
+  model_lift_min: 2.0         # a model-only offer needs probability >= this x the product's base rate
+  retention_top_share: 0.10   # guardrail: top decile of value at risk gets a retention action, not an offer
+  lightgbm_candidate: {num_leaves: 7, min_child_samples: 200, feature_fraction: 0.7, lambda_l2: 10.0}
+                              # the candidate Phase 2 chose; base settings come from model.lightgbm

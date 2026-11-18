@@ -405,3 +405,86 @@ dollars.
   data with more noise the top step will sit below 1.
 - *Why is value at risk only 2.2% of annual value?* Because 3% of customers churn in a
   quarter. The figure is a quarter's exposure, not a year's.
+
+## Phase 4: cross-sell engine (18 Nov 2026)
+
+### Rules first, because they survive a different product list
+
+`config/crosssell.yaml` holds the triggers. Each one is a product, a list of conditions on
+features from `docs/features.md` (every condition must hold), a priority, and a reason
+template whose placeholders are filled with the customer's own numbers. Adding a trigger
+is adding a block; a test loads an extra trigger from YAML alone and checks it fires. A
+product the customer already holds at the snapshot date is never offered; "holds" comes
+from the products table's start and end dates. The same file carries the model-only
+reason per product, the fallback chain (first product not held: mobile banking, savings,
+fixed deposit, FX savings) and the retention template. Nothing shown to a user is
+generated; every sentence is one of those templates (rule 8).
+
+The four starting triggers and what they did:
+
+| trigger | fires at 31 Oct 2026 | test-block uptake, triggered vs not | lift |
+| --- | --- | --- | --- |
+| remittances in 4 of 6 months, over 150 USD in 3 months, offer fx_savings | 8.5% | 7.4% vs 0.5% | 13.9x |
+| school fees in 2+ months of 12, offer education_savings | 21.6% | 5.5% vs 0.6% | 9.1x |
+| suppliers paid in 4 of 6 months, offer sme_package | 13.9% | 5.1% vs 0.4% | 12.2x |
+| salary up 10%+, balance over 1,500 USD, positive net flow, offer fixed_deposit | 13.6% | 1.6% vs 0.5% | 3.5x |
+
+"Uptake" means the product was started within 90 days after the snapshot, among customers
+who did not already hold it. Triggered customers take the matching product at 3.5 to 14
+times the rate of untriggered ones, which is the "done when" test.
+
+### Propensity models: one per product, same recipe as churn, honest about failures
+
+The label for a product at a snapshot is "started it within the next 90 days", rows
+already holding it excluded. Each product gets a small LightGBM with the Phase 2 recipe:
+same time split and gap, class weights, early stopping on validation, isotonic
+calibration, the same metrics on the test block. Two gates decide whether the model is
+used at all, both judged before the test block is touched: at least 100 uptake rows in
+the training block, and a validation ROC-AUC of at least 0.65. The bar is above "beats
+chance" because early stopping on the validation block inflates its score.
+
+| product | train uptakes | result |
+| --- | --- | --- |
+| fx_savings | 386 | model, ROC-AUC 0.807, lift@10% 6.1 |
+| education_savings | 506 | model, ROC-AUC 0.768, lift@10% 2.7 |
+| sme_package | 293 | model, ROC-AUC 0.766, lift@10% 5.0 |
+| savings_account | 117 | model, ROC-AUC 0.886, lift@10% 4.0 |
+| mobile_banking | 219 | model, ROC-AUC 0.917, lift@10% 5.2 |
+| fixed_deposit | 201 | rule only: validation ROC-AUC 0.63 |
+| personal_loan | 334 | rule only: validation ROC-AUC 0.55 |
+
+Two things to say plainly. First, the fixed-deposit and personal-loan models learned
+nothing (their first versions scored 0.54 and 0.44 on the test block, worse than a coin),
+so the fixed-deposit trigger stands alone and personal loans are never offered. The 0.65
+gate was set after seeing those two fail; it is a sanity bar, not a tuned number. Second,
+the mobile-banking model's 0.92 is suspiciously high: in the synthetic data customers use
+the app channel before the product record starts, so the model is partly reading the
+product off the channel mix. On real data expect that one to fall.
+
+### One recommendation per customer
+
+1. A triggered rule wins. If several fire, the higher model probability wins, then
+   priority. Source `rule+model` when a model exists for the product, else `rule`.
+2. No trigger: the best model probability wins if it is at least twice that product's
+   base rate (source `model`).
+3. Otherwise the first fallback product not held (source `fallback`).
+4. Guardrail last: the top decile of value at risk gets a retention action instead of any
+   offer (source `retention`), because selling to someone about to leave is how to lose
+   them faster.
+
+At 31 Oct 2026: 432 retention, 1,455 rule+model, 337 rule, 483 model, 1,616 fallback, 0
+without an action. `rec_score` is the calibrated uptake probability when a model exists,
+the rule's observed training uptake rate otherwise, and the value at risk for retention.
+
+### What a data team might ask
+
+- *Why do the models mostly agree with the rules?* Because the synthetic life events are
+  the signal. The models earn their place where a rule is missing (savings account, mobile
+  banking) and as a tie-breaker when several rules fire. On real data they may find
+  patterns no one wrote a rule for; the gates will say whether they did.
+- *Why are the uptake probabilities so small (2 to 7%)?* They are 90-day probabilities,
+  calibrated. Quote the lift, not the level.
+- *What happens on 4 Dec with the bank's product names?* Edit `crosssell.yaml`: rename
+  the products, adjust the conditions to the features that exist, add triggers for
+  products we have not seen. Products with no margin in `settings.yaml` are counted at 0
+  and listed in a warning.
