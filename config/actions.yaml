@@ -1,0 +1,33 @@
+# Recommended action and call script per reason family. The family of a customer's top reason
+# (largest positive SHAP contribution with a template) picks the block. Every sentence shown to a
+# user is one of these fixed texts; placeholders are filled with the customer's own numbers.
+#
+# Placeholders available: every feature in docs/features.md, the aliases listed in reasons.yaml,
+# and {value_at_risk_usd}, {value_12m_usd}, {p_churn_90d}, {urgency}, {recommendation}.
+
+default:
+  action: "Check-in call"
+  script: "We noticed a change in how the account is being used and wanted to check everything is in order. Is there anything about the account or our service that is not working for you?"
+
+families:
+  income_disruption:
+    action: "Ask about employer change; offer salary-switch incentive"
+    script: "We noticed the regular salary credit has not come through lately and wanted to check whether anything has changed with your employer or where your salary is paid. If it now lands elsewhere, we can move it back with no switching fee and a month of waived charges."
+  balance_drain:
+    action: "Ask where the money is going; offer a savings or fixed-deposit rate"
+    script: "Your balance has come down over the last few months and we wanted to make sure the account is still working for you. If funds are being kept elsewhere, we can offer a better rate on a savings or fixed-deposit account so they stay here."
+  leakage:
+    action: "Match the wallet or other bank: zero-fee transfers bundle"
+    script: "We see more of your payments going out through mobile wallets or another bank, and we would rather you did not pay twice for that. We can bundle wallet and ZIPIT transfers into a flat monthly fee or waive them for the next three months."
+  activity_drop:
+    action: "Re-engage: set up mobile banking and a fee holiday"
+    script: "The account has been much quieter than usual and we wanted to check whether something has changed or if there is anything making it harder to use. We can set up mobile banking in five minutes and waive transaction fees while you get going again."
+  friction:
+    action: "Fee review and refund of recent charges"
+    script: "We noticed higher charges on the account recently and we want to go through them with you line by line. Where a charge is not justified we will refund it, and we can move you to a plan that suits how you use the account."
+  new_customer:
+    action: "Onboarding call: set up salary, mobile banking and savings"
+    script: "You joined us recently and we wanted to make sure the account is fully set up for you. Can we check that your salary or main income lands here, get mobile banking working and set up a savings goal?"
+  life_event:
+    action: "Ask about the change in remittances; offer a foreign-currency savings account"
+    script: "The remittances that used to arrive have become smaller or less regular and we wanted to check whether anything has changed for the family abroad. If funds are coming through another channel, we can offer a foreign-currency savings account with lower receiving fees."
