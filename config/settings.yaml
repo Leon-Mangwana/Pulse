@@ -119,3 +119,9 @@ crosssell:                    # next best product (src/pulse/crosssell.py); the 
   retention_top_share: 0.10   # guardrail: top decile of value at risk gets a retention action, not an offer
   lightgbm_candidate: {num_leaves: 7, min_child_samples: 200, feature_fraction: 0.7, lambda_l2: 10.0}
                               # the candidate Phase 2 chose; base settings come from model.lightgbm
+
+explain:                      # reason codes and action cards (src/pulse/explain.py)
+  reasons_path: config/reasons.yaml
+  actions_path: config/actions.yaml
+  n_reasons: 3                # reasons per card, one per family, largest positive SHAP first
+  summary_top: 15             # features in the global SHAP summary
