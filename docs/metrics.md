@@ -363,3 +363,79 @@ Everything below is pasted from `models/crosssell_report.md`, which the train st
 `python -m pytest`: 36 passed (31 from earlier phases, plus trigger fires and skips held products,
 a new trigger from YAML alone, unknown operator rejected, every customer gets an action and the
 guardrail wins, triggered customers take up more on the test block).
+
+## Phase 5: reason codes and action cards
+
+### Run 2026-11-18, seed 42, 5,000 customers
+
+`python -m pulse.cli score` now also writes `data/processed/cards.json`, `shap_latest.parquet`,
+`segments.parquet` / `segments.csv` and `models/shap_summary.md` (about 10 s on top of the
+worklist). `python -m pulse.cli explain` rebuilds them from a saved worklist.
+
+SHAP values come from LightGBM's built-in TreeSHAP (`predict(pred_contrib=True)`), since the
+`shap` package cannot load on the build machine; a test checks contributions + base value equal
+the raw score.
+
+Cards at 2026-10-31, 4,323 customers: reasons per card 3: 1,040 / 2: 1,643 / 1: 1,391 / 0: 249
+(the 249 have median risk 0.5%, max 5.6%, none in the act-this-week band).
+Action family: leakage 1,827, income_disruption 742, balance_drain 651, activity_drop 490,
+default 249, friction 186, new_customer 178.
+
+Planted check (`_truth.csv`): 138 salaried churners with a planted salary stop; 137 show
+`months_since_salary >= 1` at their last snapshot before the churn month; 120 of those 137 cards
+(88%) name the salary in a reason. Before the salaried template variants: 0 of 137.
+
+**Global SHAP summary, 4,323 customers at 2026-10-31** (base value -1.461 log-odds)
+
+| feature | mean_abs_shap | pushes_up_% | share_% | family |
+| --- | --- | --- | --- | --- |
+| bal_change_vs_6m | 0.2007 | 22.4 | 6.9 | balance_drain |
+| income_change | 0.1924 | 37.2 | 6.6 | income_disruption |
+| remit_amount_3m_usd | 0.1847 | 86.8 | 6.4 | life_event |
+| school_amount_12m_usd | 0.1393 | 82.0 | 4.8 | (no template) |
+| txn_3m_vs_prior_3m | 0.1261 | 69.1 | 4.4 | activity_drop |
+| fees_3m_usd | 0.1178 | 30.9 | 4.1 | friction |
+| n_credits_1m | 0.1135 | 43.8 | 3.9 | income_disruption |
+| bal_min_3m_ratio | 0.1100 | 28.1 | 3.8 | balance_drain |
+| bal_slope_6m | 0.1029 | 14.6 | 3.6 | balance_drain |
+| pos_share_3m | 0.0986 | 39.0 | 3.4 | (no template) |
+| atm_share_3m | 0.0980 | 69.6 | 3.4 | (no template) |
+| tenure_months | 0.0844 | 46.0 | 2.9 | new_customer |
+| wallet_share_1m | 0.0785 | 27.6 | 2.7 | leakage |
+| txn_count_change | 0.0746 | 28.6 | 2.6 | activity_drop |
+| salary_growth_6m | 0.0746 | 52.0 | 2.6 | income_disruption |
+
+**Segment view** (`data/processed/segments.csv`; product rows count a customer once per product held)
+
+| dimension | group | customers | churn_rate_% | expected_churners | value_12m_usd | value_at_risk_usd | share_of_var_% | var_per_customer_usd |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| branch | Harare CBD | 938 | 2.72 | 25.5 | 221032 | 4403 | 19.7 | 4.69 |
+| branch | Bulawayo | 687 | 2.96 | 20.3 | 155266 | 4308 | 19.3 | 6.27 |
+| branch | Gweru | 363 | 4.19 | 15.2 | 91882 | 2541 | 11.4 | 7.00 |
+| branch | Masvingo | 346 | 2.99 | 10.3 | 83097 | 2406 | 10.8 | 6.95 |
+| branch | Borrowdale | 536 | 2.06 | 11.0 | 131614 | 2027 | 9.1 | 3.78 |
+| branch | Avondale | 407 | 3.31 | 13.5 | 95048 | 1977 | 8.8 | 4.86 |
+| branch | Kwekwe | 202 | 3.15 | 6.4 | 54690 | 1381 | 6.2 | 6.84 |
+| branch | Mutare | 416 | 1.96 | 8.1 | 97344 | 1345 | 6.0 | 3.23 |
+| branch | Victoria Falls | 215 | 3.38 | 7.3 | 54010 | 1072 | 4.8 | 4.99 |
+| branch | Chinhoyi | 213 | 2.49 | 5.3 | 51360 | 913 | 4.1 | 4.29 |
+| segment | salaried | 1969 | 2.81 | 55.4 | 368354 | 8027 | 35.9 | 4.08 |
+| segment | sme | 663 | 2.43 | 16.1 | 381961 | 7343 | 32.8 | 11.08 |
+| segment | informal | 1251 | 3.50 | 43.8 | 227039 | 6328 | 28.3 | 5.06 |
+| segment | diaspora | 440 | 1.73 | 7.6 | 57990 | 675 | 3.0 | 1.53 |
+| product | personal_loan | 156 | 3.79 | 5.9 | 51900 | 1362 | 6.1 | 8.73 |
+| product | sme_package | 281 | 1.69 | 4.8 | 145626 | 2103 | 9.4 | 7.48 |
+| product | savings_account | 1285 | 2.64 | 33.9 | 381995 | 6566 | 29.3 | 5.11 |
+| product | transactional_account | 4307 | 2.57 | 110.7 | 1031323 | 19425 | 86.8 | 4.51 |
+| product | mobile_banking | 2532 | 2.25 | 57.1 | 619679 | 10505 | 47.0 | 4.15 |
+| product | education_savings | 477 | 1.70 | 8.1 | 115339 | 1510 | 6.8 | 3.17 |
+| product | fixed_deposit | 171 | 1.43 | 2.5 | 44593 | 511 | 2.3 | 2.99 |
+| product | fx_savings | 385 | 1.40 | 5.4 | 88375 | 1005 | 4.5 | 2.61 |
+
+Pitch rows: SMEs are 15% of customers and 33% of value at risk (11 USD per customer vs 4 to 5);
+Gweru churns at 4.2% against 2.6% overall; diaspora customers barely churn (1.7%).
+
+Pipeline (`python -m pulse.cli pipeline`): ingest 25.7 s, features 48.0 s, train 79.5 s,
+score 26.2 s, total 179.5 s.
+
+Tests (`python -m pytest`): 42 passed (6 new in `tests/test_explain.py`).
