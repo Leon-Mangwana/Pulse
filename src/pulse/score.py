@@ -18,7 +18,7 @@ from pulse.config import PROJECT_ROOT, load_settings, resolve
 from pulse.io import read_parquet, write_parquet
 from pulse.models import churn
 from pulse.models.survival import load_products, urgency_band
-from pulse import crosssell
+from pulse import crosssell, explain
 from pulse.pseudo import id_map, pseudonymise
 from pulse.value import compute_value
 
@@ -107,6 +107,10 @@ def main(root: Path = PROJECT_ROOT) -> pd.DataFrame:
         top[c] = top[c].round(0)
     print("\ntop 20 by value at risk\n" + top.to_string(index=False))
     print(f"\nscored in {time.perf_counter() - t0:.1f}s")
+
+    print("\n=== reason codes, action cards and segment view ===")
+    rows = feats[feats["snapshot_date"] == pd.Timestamp(snap)]
+    explain.run(worklist, rows, products, settings, resolve(root, churn.MODEL_DIR), processed, root)
     return worklist
 
 

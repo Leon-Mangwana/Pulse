@@ -54,12 +54,19 @@ def step_score():
     score.main()
 
 
+def step_explain():
+    """Rebuild cards.json, the SHAP summary and the segment view from the saved worklist (score does this too)."""
+    from pulse import explain
+    explain.main()
+
+
 STEPS = {
     "data": step_data,
     "ingest": step_ingest,
     "features": step_features,
     "train": step_train,
     "score": step_score,
+    "explain": step_explain,
 }
 # the pipeline never regenerates data: on hackathon day the raw folder holds the bank's files
 PIPELINE = ["ingest", "features", "train", "score"]

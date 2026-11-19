@@ -1,0 +1,193 @@
+# Reason templates for the churn cards. One block per feature that is worth a sentence.
+#
+# For each customer the three features with the largest positive SHAP contribution are taken,
+# one per family, and their templates rendered with the customer's own values. A feature with
+# no block here is skipped, never described with generated text (rule 8).
+#
+#   family:   reasons from the same family are not repeated on one card; the top family picks
+#             the action in actions.yaml
+#   when:     optional list of [feature, operator, value] conditions (operators >=, >, <=, <, ==, !=);
+#             the sentence is only rendered when all hold, so a sentence never contradicts the numbers
+#   template: {feature} placeholders with Python format specs (:.0f, :,.0f, :.0%, :+.0f ...)
+#   variants: instead of one when/template, an ordered list of {when, template}; the first variant
+#             whose conditions hold is used (put the more specific sentence first)
+#
+# Besides every feature in docs/features.md, templates may use these fixed aliases, computed in
+# src/pulse/explain.py and nothing else:
+#   {name_pct}       the feature x 100                 e.g. wallet_share_trend_pct
+#   {name_drop_pct}  (1 - the feature) x 100           e.g. bal_change_vs_6m_drop_pct
+#   {name_abs_pct}   |the feature| x 100               e.g. bal_slope_6m_abs_pct
+#   {wallet_share_prior_3m} {obank_share_prior_3m} {leak_share_prior_3m}
+#                    the share over the 3 months before the last 3 (share_3m minus trend)
+
+families:
+  income_disruption: "Income disruption"
+  balance_drain: "Balance drain"
+  leakage: "Money leaving to wallets or other banks"
+  activity_drop: "Activity drop"
+  friction: "Fees and friction"
+  new_customer: "New relationship"
+  life_event: "Life event"
+
+features:
+  # ---- income ----
+  months_since_salary:
+    family: income_disruption
+    when: [[salary_detected, "==", 1], [months_since_salary, ">=", 1]]
+    template: "No salary-sized credit for {months_since_salary:.0f} month(s); about {salary_amount_usd:,.0f} USD used to arrive every month."
+  salary_change_1m:
+    family: income_disruption
+    when: [[salary_detected, "==", 1], [salary_change_1m, "<", 0.9]]
+    template: "This month's largest credit is {salary_change_1m:.0%} of the usual salary of {salary_amount_usd:,.0f} USD."
+  salary_trend_3m:
+    family: income_disruption
+    when: [[salary_detected, "==", 1], [salary_trend_3m, "<", 0.85]]
+    template: "Salary-sized credits over the last 3 months are {salary_trend_3m:.0%} of the 3 months before."
+  n_salary_months_6m:
+    family: income_disruption
+    when: [[salary_detected, "==", 1], [n_salary_months_6m, "<=", 4]]
+    template: "Salary arrived in only {n_salary_months_6m:.0f} of the last 6 months."
+  payer_changed:
+    family: income_disruption
+    when: [[payer_changed, "==", 1]]
+    template: "The most recent salary came from a different payer than the one before."
+  income_change:
+    family: income_disruption
+    variants:   # first variant whose conditions hold is used; the salaried one is more specific
+      - when: [[income_change, "<", 0.8], [salary_detected, "==", 1], [months_since_salary, ">=", 1]]
+        template: "No salary-sized credit for {months_since_salary:.0f} month(s) (about {salary_amount_usd:,.0f} USD used to arrive monthly); money coming in this month is {income_change:.0%} of the 6-month average."
+      - when: [[income_change, "<", 0.8]]
+        template: "Money coming in this month ({income_1m_usd:,.0f} USD) is {income_change:.0%} of the 6-month average."
+  salary_growth_6m:
+    family: income_disruption
+    when: [[salary_detected, "==", 1], [salary_growth_6m, "<", 0.85]]
+    template: "Salary-sized credits are {salary_growth_6m:.0%} of what they were six months ago."
+  n_credits_1m:
+    family: income_disruption
+    when: [[n_credits_1m, "<=", 1]]
+    template: "Only {n_credits_1m:.0f} credit(s) arrived this month."
+
+  # ---- balance ----
+  bal_change_vs_6m:
+    family: balance_drain
+    variants:
+      - when: [[bal_change_vs_6m, "<", 0.8], [salary_detected, "==", 1], [months_since_salary, ">=", 1]]
+        template: "Balance is {bal_change_vs_6m:.0%} of its 6-month average ({bal_end_usd:,.0f} USD now against {bal_avg_6m_usd:,.0f} USD) and no salary-sized credit has arrived for {months_since_salary:.0f} month(s)."
+      - when: [[bal_change_vs_6m, "<", 0.8]]
+        template: "Balance is {bal_change_vs_6m:.0%} of its 6-month average: {bal_end_usd:,.0f} USD now against {bal_avg_6m_usd:,.0f} USD."
+  bal_slope_6m:
+    family: balance_drain
+    when: [[bal_slope_6m, "<", -0.05]]
+    template: "Balance has been falling for 6 months, by about {bal_slope_6m_abs_pct:.0f}% of the average balance each month."
+  bal_drop_from_3m_peak:
+    family: balance_drain
+    when: [[bal_drop_from_3m_peak, ">", 0.3]]
+    template: "{bal_drop_from_3m_peak:.0%} of the 3-month peak balance has gone."
+  bal_min_3m_ratio:
+    family: balance_drain
+    when: [[bal_min_3m_ratio, "<", 0.5]]
+    template: "In the last 3 months the balance touched {bal_min_3m_ratio:.0%} of its 6-month average."
+  net_flow_3m_usd:
+    family: balance_drain
+    when: [[net_flow_3m_usd, "<", 0]]
+    template: "More money went out than came in over the last 3 months (net {net_flow_3m_usd:,.0f} USD)."
+  net_flow_1m_usd:
+    family: balance_drain
+    when: [[net_flow_1m_usd, "<", 0]]
+    template: "More money went out than came in this month (net {net_flow_1m_usd:,.0f} USD)."
+
+  # ---- leakage ----
+  wallet_share_trend:
+    family: leakage
+    when: [[wallet_share_trend, ">", 0.05]]
+    template: "Transfers to mobile wallets rose from {wallet_share_prior_3m:.0%} to {wallet_share_3m:.0%} of spending over the last 3 months."
+  wallet_share_1m:
+    family: leakage
+    when: [[wallet_share_1m, ">", 0.2]]
+    template: "{wallet_share_1m:.0%} of this month's spending went to mobile wallets."
+  wallet_share_3m:
+    family: leakage
+    when: [[wallet_share_3m, ">", 0.2]]
+    template: "{wallet_share_3m:.0%} of the last 3 months' spending went to mobile wallets."
+  obank_share_trend:
+    family: leakage
+    when: [[obank_share_trend, ">", 0.05]]
+    template: "Transfers to other banks rose from {obank_share_prior_3m:.0%} to {obank_share_3m:.0%} of spending over the last 3 months."
+  obank_share_1m:
+    family: leakage
+    when: [[obank_share_1m, ">", 0.2]]
+    template: "{obank_share_1m:.0%} of this month's spending went to other banks."
+  obank_share_3m:
+    family: leakage
+    when: [[obank_share_3m, ">", 0.2]]
+    template: "{obank_share_3m:.0%} of the last 3 months' spending went to other banks."
+  leak_share_trend:
+    family: leakage
+    when: [[leak_share_trend, ">", 0.05]]
+    template: "Money leaving to wallets and other banks rose from {leak_share_prior_3m:.0%} to {leak_share_3m:.0%} of spending over the last 3 months."
+  leak_share_3m:
+    family: leakage
+    when: [[leak_share_3m, ">", 0.3]]
+    template: "{leak_share_3m:.0%} of the last 3 months' spending left to wallets or other banks ({leak_amount_3m_usd:,.0f} USD)."
+  leak_amount_3m_usd:
+    family: leakage
+    when: [[leak_amount_3m_usd, ">", 100]]
+    template: "{leak_amount_3m_usd:,.0f} USD went to wallets and other banks in the last 3 months."
+  cash_share_3m:
+    family: leakage
+    when: [[cash_share_3m, ">", 0.3]]
+    template: "Cash withdrawals took {cash_share_3m:.0%} of spending in the last 3 months."
+
+  # ---- engagement ----
+  txn_count_change:
+    family: activity_drop
+    when: [[txn_count_change, "<", 0.7]]
+    template: "{txn_count_1m:.0f} transactions this month against a usual {txn_count_6m_avg:.0f} a month."
+  txn_3m_vs_prior_3m:
+    family: activity_drop
+    when: [[txn_3m_vs_prior_3m, "<", 0.7]]
+    template: "Transactions over the last 3 months are {txn_3m_vs_prior_3m:.0%} of the 3 months before."
+  active_days_change:
+    family: activity_drop
+    when: [[active_days_change, "<", 0.7]]
+    template: "Active on {active_days_1m:.0f} day(s) this month, {active_days_change:.0%} of the usual number."
+  months_since_last_txn:
+    family: activity_drop
+    when: [[months_since_last_txn, ">=", 1]]
+    template: "No transactions at all for {months_since_last_txn:.0f} month(s)."
+  digital_share_change_6m:
+    family: activity_drop
+    when: [[digital_share_change_6m, "<", -0.1]]
+    template: "Use of app, USSD and ZIPIT fell by {digital_share_change_6m_abs_pct:.0f} points over 6 months."
+  tenure_months:
+    family: new_customer
+    when: [[tenure_months, "<", 12]]
+    template: "A customer for only {tenure_months:.0f} months; new relationships are the easiest to lose."
+
+  # ---- friction ----
+  fee_change:
+    family: friction
+    when: [[fee_change, ">", 1.3]]
+    template: "Fees this month ({fees_1m_usd:,.0f} USD) are {fee_change:.1f}x the 6-month average."
+  fee_share_3m:
+    family: friction
+    when: [[fee_share_3m, ">", 0.03]]
+    template: "Fees took {fee_share_3m:.1%} of all money out over the last 3 months."
+  reversals_3m:
+    family: friction
+    when: [[reversals_3m, ">=", 1]]
+    template: "{reversals_3m:.0f} reversed transaction(s) in the last 3 months."
+  fees_3m_usd:
+    family: friction
+    when: [[fee_change, ">", 1.2], [fees_3m_usd, ">", 10]]
+    template: "Paid {fees_3m_usd:,.0f} USD in fees over the last 3 months, and this month's fees are {fee_change:.1f}x the usual."
+
+  # ---- life events ----
+  remit_change:
+    family: life_event
+    when: [[remit_months_6m, ">=", 1], [remit_change, "<", 0.7]]
+    template: "Remittances over the last 3 months are {remit_change:.0%} of the 3 months before."
+  remit_amount_3m_usd:
+    family: life_event
+    when: [[remit_months_6m, ">=", 1], [remit_amount_3m_usd, "<=", 0]]
+    template: "Remittances used to arrive but none came in the last 3 months."
