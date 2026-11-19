@@ -2,6 +2,9 @@
 
     python scripts/inspect_worklist.py            # all three checks
     python scripts/inspect_worklist.py --rows 5   # more reason examples per source
+    python scripts/inspect_worklist.py --cards 20 # print the first 20 action cards as text
+    python scripts/inspect_worklist.py --cards 20 --from 100   # cards ranked 100 to 119
+    python scripts/inspect_worklist.py --segments # the segment view sorted by value at risk
 """
 import argparse
 import sys
@@ -44,7 +47,24 @@ def main() -> int:
     return 0
 
 
+def _arg(flag, default):
+    return int(sys.argv[sys.argv.index(flag) + 1]) if flag in sys.argv else default
+
+
 if __name__ == "__main__":
+    if "--cards" in sys.argv:
+        import json
+        from pulse.explain import card_text
+        cards = json.loads((ROOT / "data" / "processed" / "cards.json").read_text(encoding="utf-8"))
+        start, n = _arg("--from", 1) - 1, _arg("--cards", 20)
+        for c in cards[start:start + n]:
+            print(card_text(c)); print()
+        sys.exit(0)
+    if "--segments" in sys.argv:
+        seg = pd.read_csv(ROOT / "data" / "processed" / "segments.csv")
+        pd.set_option("display.width", 200)
+        print(seg.sort_values("value_at_risk_usd", ascending=False).to_string(index=False))
+        sys.exit(0)
     if "--find" in sys.argv:
         i = sys.argv.index("--find")
         phrase = sys.argv[i + 1]
