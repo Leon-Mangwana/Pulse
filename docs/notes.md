@@ -488,3 +488,112 @@ the rule's observed training uptake rate otherwise, and the value at risk for re
   the products, adjust the conditions to the features that exist, add triggers for
   products we have not seen. Products with no margin in `settings.yaml` are counted at 0
   and listed in a warning.
+
+## Phase 5: reason codes and action cards (18 Nov 2026)
+
+### What a SHAP value is, on the first card
+
+The churn model adds up. For any customer its raw score (in log-odds, before calibration) is a
+base value, the same for everyone, plus one contribution per feature. SHAP (TreeSHAP for tree
+models) is the method that splits a tree model's prediction into those per-feature contributions
+fairly, so that they always sum exactly to the prediction. A positive contribution pushed this
+customer's score towards churn, a negative one pulled it away.
+
+The customer ranked first at 31 Oct 2026 (SME, Bulawayo, calibrated risk 67%, 564 USD at risk):
+
+| | log-odds |
+| --- | --- |
+| base value (everyone starts here) | -1.46 |
+| bal_change_vs_6m: balance is 0% of its 6-month average | +1.80 |
+| bal_min_3m_ratio: balance touched 0% of the average in the last 3 months | +0.62 |
+| income_change: money in this month is 0% of the 6-month average | +0.54 |
+| bal_drop_from_3m_peak: 100% of the 3-month peak balance has gone | +0.44 |
+| net_flow_3m_usd: more out than in over 3 months | +0.36 |
+| txn_count_change: 8 transactions against a usual 26 | +0.34 |
+| 63 other features, mostly small negatives (little leakage to wallets or other banks) | -0.35 |
+| raw score | 3.41 |
+
+Three of the six positive features describe the same thing, the balance collapsing, so the card
+keeps one per family: balance drain, income disruption, activity drop. The raw score of 3.41 would
+be a 97% probability on its own; the isotonic calibrator from Phase 2 maps it to 67%, because the
+model was trained with churners up-weighted and its raw outputs run hot. Calibration only
+stretches the scale, it never reorders customers, so "which features pushed this customer up" is
+unaffected by it.
+
+The `shap` package itself cannot load on the build machine (Windows App Control blocks a compiled
+scikit-learn file it imports). LightGBM has the same TreeSHAP algorithm built in, reached with
+`Booster.predict(pred_contrib=True)`, and that is what `explain.py` uses. A test checks that the
+contributions plus the base value reproduce the model's raw score to six decimals.
+
+### Why the global SHAP summary and the Phase 2 gain table disagree
+
+Gain (Phase 2) measures how much each feature improved the training loss when the trees were
+built. Mean |SHAP| measures how much each feature actually moves scores on the customers being
+scored today. `bal_change_vs_6m` tops both (38% of gain, 7% of mean |SHAP|), but features such
+as `remit_amount_3m_usd` and `school_amount_12m_usd` rank high on mean |SHAP| while being minor
+by gain. They push the score up for 80 to 90% of customers, by a small, uniform amount: in this
+synthetic data customers with no remittances or school fees churn slightly more, so "having no
+remittances" is a weak, diffuse risk factor. That is not something to tell a relationship
+manager, so those features have no template except for the honest case (remittances used to
+arrive and have stopped).
+
+### Reason templates: fixed sentences, conditions, variants
+
+`config/reasons.yaml` has one block per feature worth a sentence (36 of the 69 features). Each
+block names a family, a template filled with the customer's own numbers, and conditions that must
+hold for the sentence to be rendered, so a positive SHAP value on `months_since_salary` for a
+customer whose salary did arrive this month produces nothing rather than a wrong sentence.
+A block can hold ordered variants: the first whose conditions hold is used. `income_change` has
+a salaried variant ("No salary-sized credit for 3 month(s), about 250 USD used to arrive
+monthly; money coming in this month is 19% of the 6-month average") ahead of the generic one.
+Features without a block are skipped, never described with generated text (rule 8). The three
+aliases a template may use besides the features (`_pct`, `_drop_pct`, `_abs_pct`, plus the three
+"share before the last 3 months" values) are computed in `explain.py` and listed at the top of
+the YAML; nothing else is derived.
+
+Per card: the three largest positive contributions that have a template, one per family. Result
+at 31 Oct 2026, 4,323 cards: 1,040 with three reasons, 1,643 with two, 1,391 with one, 249 with
+none. The 249 are the safest customers on the list (median risk 0.5%, maximum 5.6%, none in the
+act-this-week band): nothing on their account is wrong enough to say. They get the default
+check-in action.
+
+### Actions: the top reason's family picks the call
+
+`config/actions.yaml` maps each family to an action and a two-sentence script, with a default.
+The family of the first reason (largest contribution) decides. Counts at 31 Oct: leakage 1,827,
+income disruption 742, balance drain 651, activity drop 490, default 249, friction 186, new
+customer 178. Leakage leads because its sentences fire on moderate risk customers whose wallet
+share rose; the high-risk cards are almost all balance drain and income disruption.
+
+### The planted-churner check
+
+In `_truth.csv`, 138 churners are salaried customers whose salary was planted to stop. At each
+one's last snapshot before the churn month, 137 have `months_since_salary >= 1`, so the stop is
+visible in the features. Their cards: 120 of 137 (88%) carry a sentence that names the salary.
+Before the salaried variants were added the figure was 0 of 137: the model attributes the stop to
+`income_change` and `bal_change_vs_6m` (ranked 4th and 1st on those rows) and barely uses
+`months_since_salary` (median rank 30), because once income has collapsed the salary-specific
+features add nothing. The SHAP ranking is honest about what the model uses; the variant puts the
+salary fact, which is a fact of the row, into the sentence. The test repeats this on the small
+synthetic set and requires at least 60%.
+
+### Segment view
+
+`data/processed/segments.parquet` (and `.csv`): one row per branch, per segment and per product
+held, with customers, mean churn probability, expected churners, 12-month value, value at risk,
+share of the total, and value at risk per customer. Pitch rows: SMEs are 15% of customers but
+carry 33% of value at risk, 11 USD per customer against 4 to 5 for the rest; Gweru has the
+highest churn rate of any branch at 4.2% against 2.6% overall; diaspora customers barely churn
+(1.7%).
+
+### What a data team might ask
+
+- *Why not show the three biggest SHAP values whatever they are?* Because half of them have no
+  honest sentence (channel mix, "no school fees"), and a card that says "atm_share_3m = 0.12"
+  helps nobody. Skipping is safer than inventing.
+- *Are the reasons causal?* No. They are the features that moved this customer's score, under a
+  model trained on correlations. The card says what changed on the account; the call finds out why.
+- *Will the templates survive the bank's data?* The YAML references features by name; if a
+  feature is renamed or missing, its block is skipped and a test flags unfilled placeholders.
+  Thresholds in the `when` conditions are in the customer's own units (months, shares) and should
+  be sanity-checked against the bank's distributions on 4 Dec.
