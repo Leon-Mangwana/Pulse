@@ -22,6 +22,7 @@ py -3.11 -m venv .venv
 | train | `python -m pulse.cli train` | churn model (time split, rules / logistic / LightGBM, calibration, sanity and fairness checks), then the Cox time-to-churn model and the value-at-risk report; saves `models/` |
 | train | (same command) | also fits the Cox time-to-churn model and one propensity model per product, and writes `models/value_report.md` and `models/crosssell_report.md` |
 | score | `python -m pulse.cli score` | worklist at the latest snapshot: probability, 12-month value, value at risk, rank, urgency band, next best product or retention action with its reason (rules in `config/crosssell.yaml`); writes `data/processed/worklist.parquet` (pseudonymised) and `id_map.parquet` |
+| score | (same command) | also writes the action cards `data/processed/cards.json` (three templated reasons, action, call script, next best product per customer), `shap_latest.parquet`, the segment view `segments.parquet`/`.csv` and `models/shap_summary.md`; `python -m pulse.cli explain` rebuilds these from a saved worklist |
 | pipeline | `python -m pulse.cli pipeline` | run every built step in order with timings |
 | tests | `python -m pytest` | run the test suite |
 
