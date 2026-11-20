@@ -10,13 +10,14 @@ scikit-learn==1.9.1
 scipy==1.17.1
 lightgbm==4.7.0
 lifelines==0.30.3
-shap==0.51.0
+# shap is NOT used: explain.py takes SHAP values from LightGBM's built-in TreeSHAP (predict(pred_contrib=True))
 # serving
 fastapi==0.163.1
 pydantic==2.14.3
-uvicorn[standard]==0.54.0
+uvicorn==0.54.0
 httpx==0.28.1
 # dashboard
 streamlit==1.67.0
+requests==2.34.2
 # tests
 pytest==9.2.0
