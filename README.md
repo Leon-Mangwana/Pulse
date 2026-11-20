@@ -23,6 +23,10 @@ py -3.11 -m venv .venv
 | train | (same command) | also fits the Cox time-to-churn model and one propensity model per product, and writes `models/value_report.md` and `models/crosssell_report.md` |
 | score | `python -m pulse.cli score` | worklist at the latest snapshot: probability, 12-month value, value at risk, rank, urgency band, next best product or retention action with its reason (rules in `config/crosssell.yaml`); writes `data/processed/worklist.parquet` (pseudonymised) and `id_map.parquet` |
 | score | (same command) | also writes the action cards `data/processed/cards.json` (three templated reasons, action, call script, next best product per customer), `shap_latest.parquet`, the segment view `segments.parquet`/`.csv` and `models/shap_summary.md`; `python -m pulse.cli explain` rebuilds these from a saved worklist |
+| monitor | `python -m pulse.cli monitor` | appends a run-log line to `data/processed/runs.jsonl` and writes the feature drift report (PSI per feature, latest snapshot vs the training block) to `models/drift_report.md` and `data/processed/drift.parquet` |
+| pipeline | `python -m pulse.cli pipeline` | ingest, features, train, score, monitor in order, with the time each step took |
+| api | `.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload` | FastAPI on http://localhost:8000 (docs at `/docs`): `/health`, `/worklist`, `/customers/{ref}/card`, `/segments`, `/metrics`, `POST /simulate`, `POST /reload` |
+| docker | `docker compose up` | api on :8000 and dashboard on :8501 sharing `./data` and `./models`; see `docs/runbook-docker.md` for offline builds |
 | pipeline | `python -m pulse.cli pipeline` | run every built step in order with timings |
 | tests | `python -m pytest` | run the test suite |
 
