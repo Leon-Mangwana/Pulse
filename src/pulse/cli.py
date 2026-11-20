@@ -54,6 +54,12 @@ def step_score():
     score.main()
 
 
+def step_monitor():
+    """Append the run log entry and write the feature drift report (PSI vs the training block)."""
+    from pulse import monitor
+    monitor.main()
+
+
 def step_explain():
     """Rebuild cards.json, the SHAP summary and the segment view from the saved worklist (score does this too)."""
     from pulse import explain
@@ -67,9 +73,10 @@ STEPS = {
     "train": step_train,
     "score": step_score,
     "explain": step_explain,
+    "monitor": step_monitor,
 }
 # the pipeline never regenerates data: on hackathon day the raw folder holds the bank's files
-PIPELINE = ["ingest", "features", "train", "score"]
+PIPELINE = ["ingest", "features", "train", "score", "monitor"]
 
 
 def run_pipeline():
