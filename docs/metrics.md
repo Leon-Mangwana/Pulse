@@ -439,3 +439,61 @@ Pipeline (`python -m pulse.cli pipeline`): ingest 25.7 s, features 48.0 s, train
 score 26.2 s, total 179.5 s.
 
 Tests (`python -m pytest`): 42 passed (6 new in `tests/test_explain.py`).
+
+## Phase 6: scoring API, monitoring and Docker
+
+### Run 2026-11-19, seed 42, 5,000 customers
+
+`python -m pulse.cli pipeline` now ends with `monitor`: ingest 24.3 s, features 46.3 s,
+train 69.4 s, score 29.8 s, monitor 2.8 s, total 172.6 s.
+
+**API** (`api/main.py`, `uvicorn api.main:app`): `/health`, `/worklist`, `/customers/{ref}/card`,
+`/segments`, `/metrics`, `POST /simulate`, `POST /reload`; Pydantic response models; reads only
+pipeline outputs, pseudonymised references only.
+
+`POST /simulate` at 2026-10-31 with the defaults (top_n 500, 2 USD per contact, 10 USD per save,
+save rate 30%):
+
+| outreach | expected churners contacted | expected saves | revenue protected USD | total cost USD | net return USD | return per USD |
+| --- | --- | --- | --- | --- | --- | --- |
+| targeted (top 500 by value at risk) | 85.1 | 25.5 | 4,617 | 1,255 | +3,361 | 3.68 |
+| random (500) | 14.2 | 4.3 | 776 | 1,043 | -266 | 0.75 |
+
+Uplift of targeted over random: +3,628 USD net on 500 calls.
+
+**Monitoring** (`src/pulse/monitor.py`): run log `data/processed/runs.jsonl` (one JSON line per
+run); drift report `models/drift_report.md` and `data/processed/drift.parquet`, PSI per feature,
+latest snapshot (2026-10-31, 4,323 rows) vs the training block (to 2025-10-31, 27,646 rows), 10
+quantile bins fixed on training. Result: 56 stable (< 0.10), 10 watch (0.10 to 0.25), 3
+investigate (>= 0.25).
+
+| feature | psi | status | train_mean | latest_mean |
+| --- | --- | --- | --- | --- |
+| bal_change_vs_6m | 0.479 | investigate | 1.164 | 1.088 |
+| bal_slope_6m | 0.476 | investigate | 0.046 | 0.025 |
+| salary_growth_6m | 0.389 | investigate | 1.071 | 1.088 |
+| bal_avg_6m_usd | 0.218 | watch | 1472.6 | 2390.4 |
+| digital_share_change_6m | 0.200 | watch | 0.009 | -0.002 |
+| bal_avg_3m_usd | 0.191 | watch | 1589.7 | 2500.1 |
+| bal_end_usd | 0.182 | watch | 1654.4 | 2566.4 |
+| bal_min_3m_ratio | 0.180 | watch | 0.979 | 0.962 |
+| school_terms_12m | 0.178 | watch | 0.586 | 0.825 |
+| fees_1m_usd | 0.127 | watch | 5.523 | 5.586 |
+
+Reading: the synthetic generator grows balances through the whole span (average 6-month balance
+1,253 USD at the first snapshot, 2,390 USD at the last) and relative growth was faster in 2025,
+so the balance-change features really have shifted since training; `salary_growth_6m` is a
+short-history artefact (15% of training rows carry the fill value 1.0, 0.2% now).
+
+Tests (`python -m pytest`): 51 passed (9 new in `tests/test_api.py`).
+
+**Docker** (20 Nov 2026, offline build from `wheels/`, 72 wheels, 208 MB):
+
+| check | result |
+| --- | --- |
+| `docker compose build --build-arg PIP_FLAGS="--no-index"` | ok, 7.5 min, image `pulse:latest` 1.81 GB |
+| `docker compose up` with pipeline outputs in `data/` | api healthy in 3 s; `/health` 4,323 customers; `/worklist?limit=3` ranks 1-3 P57DB131092, PED90361E77, P5D159A7254; `/customers/P57DB131092/card` 200 with 3 reasons; unknown ref 404; `/segments`, `/simulate` (uplift 3,627.76 USD), `/metrics` ok; dashboard placeholder 200 on :8501 |
+| clean checkout (empty `data/`, `models/`) | first run killed (Docker VM 3.75 GB with 2.2 GB held by unrelated containers), second run crashed writing `docs/features.md` (folder not in the image; fixed in `features/build.py`), third run ok after the VM was raised to 5 GB: data 80.6 s, pipeline 149.9 s (ingest 15.1, features 28.3, train 86.3, score 18.9, monitor 1.2), healthy 4 min after start, `/health` 4,323 customers, `/worklist` rank 1 P57DB131092 (same as the host run), card 200; container peak memory 2,179 MiB |
+
+Online build on the same day failed twice on a 2 to 10 kB/s connection (pip read timeout after
+backtracking through matplotlib releases); the wheel cache path is the one to rely on.

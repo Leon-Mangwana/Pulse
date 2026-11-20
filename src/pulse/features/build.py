@@ -68,6 +68,7 @@ def build_features(tx: pd.DataFrame, accounts: pd.DataFrame, customers: pd.DataF
 
 
 def write_dictionary(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)   # docs/ is not copied into the Docker image
     lines = ["# Feature dictionary", "",
              "One row per customer per month-end snapshot. Every feature uses only transactions dated",
              "before the snapshot date. Money is in USD (ZiG converted at `fx.zig_per_usd` in settings.yaml).",

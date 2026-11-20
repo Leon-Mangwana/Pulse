@@ -18,3 +18,7 @@ dist/
 *.swp
 .DS_Store
 Thumbs.db
+
+# docker offline artefacts (docs/runbook-docker.md)
+wheels/*.whl
+pulse-image.tar
