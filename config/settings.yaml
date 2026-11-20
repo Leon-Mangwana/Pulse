@@ -125,3 +125,21 @@ explain:                      # reason codes and action cards (src/pulse/explain
   actions_path: config/actions.yaml
   n_reasons: 3                # reasons per card, one per family, largest positive SHAP first
   summary_top: 15             # features in the global SHAP summary
+
+monitor:                      # run log and drift report (src/pulse/monitor.py)
+  runs_log: data/processed/runs.jsonl
+  psi_bins: 10                # quantile bins fixed on the training block
+  psi_watch: 0.10             # PSI at or above this: watch
+  psi_alert: 0.25             # PSI at or above this: investigate before trusting the scores
+
+simulate:                     # default assumptions for POST /simulate and the ROI page
+  top_n: 500                  # customers contacted, from the top of the value-at-risk ranking
+  cost_per_contact_usd: 2.0   # staff time per call
+  incentive_cost_usd: 10.0    # paid per customer actually saved (fee waiver, rate bonus)
+  save_rate: 0.30             # share of would-be churners a contact retains
+
+api:
+  host: 0.0.0.0
+  port: 8000
+  default_limit: 100
+  max_limit: 5000
