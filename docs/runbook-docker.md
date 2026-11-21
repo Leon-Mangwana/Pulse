@@ -32,6 +32,53 @@ Invoke-RestMethod -Method Post http://localhost:8000/reload     # the running ap
 
 Or run it on the host (`.\.venv\Scripts\python.exe -m pulse.cli pipeline`) and call `/reload`.
 
+## The dashboard (Phase 7)
+
+`docker compose up` serves it at http://localhost:8501. Four pages in demo order: Worklist,
+Customer card, Insights, ROI simulator. It only talks to the api service (`PULSE_API_URL`),
+caches every response for five minutes and shows a waiting page until the api reports a loaded
+worklist. After a new pipeline run call `/reload` on the api and press "Refresh data" in the
+sidebar (or wait five minutes).
+
+### Editing without rebuilding
+
+`docker-compose.dev.yml` mounts `src/`, `api/`, `dashboard/`, `config/`, `tests/` and
+`.streamlit/` into the containers, so a saved file is live on the next request (Streamlit
+re-runs on its own):
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+Rebuild (`docker compose build --build-arg PIP_FLAGS="--no-index"`, 20 s with the cached
+package layer) before relying on the plain `docker compose up` again.
+
+### Tests that need the containers
+
+Streamlit (and on the build machine scikit-learn, see below) cannot import from the local venv,
+so these run inside the containers:
+
+```powershell
+# whole suite (dashboard page tests skip here because the api is not reachable from the api container)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps api python -m pytest -q
+# the four Streamlit pages against the live api (starts the api if needed)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm dashboard python -m pytest -q tests/test_dashboard_app.py
+```
+
+The page tests render each page twice with Streamlit's AppTest and assert the second, cached
+render takes under two seconds, that no raw feature name appears, and that the ROI simulator
+gives zeros at zero contacts and no uplift when everyone is contacted.
+
+### Screenshots at projector size
+
+`scripts/screenshot_pages.py` drives headless Edge through the DevTools protocol and saves
+1280x720 PNGs of the four pages (the `--screenshot` flag alone captures Streamlit's loading
+skeleton, because it does not wait for the websocket):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\screenshot_pages.py docs\screens http://localhost:8501
+```
+
 ## Building with no internet
 
 Docker needs the base image and the Python wheels. Either path below is done once while online.
@@ -106,3 +153,7 @@ the host (`.\.venv\Scripts\python.exe -m pulse.cli pipeline`) and let the contai
 - Port 8000 or 8501 in use: change the left-hand number in `docker-compose.yml` (`"8080:8000"`).
 - Streamlit cannot run from the local `.venv` on the build machine (its pyarrow dependency is
   blocked by Windows App Control); use the container.
+- `DLL load failed ... An Application Control policy has blocked this file` for a scikit-learn
+  file: Smart App Control's cloud reputation for that file changed (it blocked `_sgd_fast` on
+  20 Nov after working for three days). Nothing in the repo can fix it; run that step in the
+  container with the dev override above.

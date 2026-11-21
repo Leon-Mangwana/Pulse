@@ -1295,3 +1295,81 @@ laptop running nothing else the default 4 GB VM is enough.
   shift in outputs is visible as well.
 - *What if the bank's data has different segments or branches?* The API filters by whatever
   values are in the worklist; nothing is hard-coded.
+
+## Phase 7: dashboard and ROI simulator (20 Nov 2026)
+
+### Four pages, one accent colour, nothing the API does not already say
+
+The dashboard (`dashboard/app.py`, Streamlit) never computes a score, a reason or a sentence
+about a customer. It reads the API and lays the answers out in the order of the demo:
+
+1. **Worklist**: three numbers (customers in the two "act" urgency bands, total value at risk,
+   the share of it held by the top 10% of the ranking) above the ranked table; branch and segment
+   filters; selecting a row opens the card.
+2. **Customer card**: risk, urgency, value at risk, the three templated reasons with their family
+   chips, the action and call script, the next best product, and a 12-month chart of month-end
+   balance (line) against salary credits and all money in (bars). The chart comes from a new
+   `GET /customers/{ref}/history` that reads the last twelve rows of `features.parquet` for that
+   customer, so the reasons on the left are visible in the data on the right: for the top
+   customer the balance line climbs to 11,648 USD and falls to zero in the last month, and the
+   salary bars stop four months before.
+3. **Insights**: churn drivers bank-wide, value at risk by branch, segment and product, the
+   model-versus-rules table and the fairness table.
+4. **ROI simulator**: four sliders; the headline figures come from `POST /simulate`, the curve
+   from the same arithmetic in `dashboard/logic.py` applied cumulatively down the ranking (a
+   test asserts the two agree at every point).
+
+Column headers and labels come from one dictionary in `dashboard/logic.py`, so a raw feature
+name cannot reach the screen; the page tests scan every rendered string for the feature-name
+patterns and fail if one appears.
+
+### Churn drivers in plain English: the one modelling choice here
+
+The Phase 5 SHAP summary is per feature, and feature names are not for a projector. The new
+`GET /drivers` adds up the mean absolute SHAP value of all features in each reason family
+(balance drain, income disruption, activity drop, fees and friction, new relationship, life
+event, money leaving to wallets or other banks) and reports each family's share of the total.
+That is a faithful aggregation: SHAP values are additive, so a family's summed impact is the
+part of the score it explains on average. The top five individual signals keep the plain
+readings already written for `metrics.json` in Phase 2. On the synthetic data balance drain is
+28% of model impact, income disruption 26%, activity drop 14%, life event 13%.
+
+### The ROI curve and its extremes
+
+Net return at N contacts is: revenue protected (sum over the top N of probability x 12-month
+value, times the save rate) minus contact cost (N x cost per contact) minus incentive cost
+(expected saves x incentive). Random outreach at N is N times the population average of the
+same quantities, a straight line. At zero contacts both are zero. When everyone is contacted
+both lines meet, because the ranking no longer matters; the simulator's uplift reads zero
+there, which is the right answer and a quick sanity check for a judge. With the default
+assumptions the Pulse line peaks at 435 contacts (3,368 USD net) and goes negative
+beyond about 3,060, where the remaining customers' expected value no longer covers the call.
+
+### Two seconds
+
+Every response is cached in the Streamlit process for five minutes, so a page is an in-memory
+lookup after its first render. Measured inside the container with Streamlit's AppTest: first
+render 4.4 s for the worklist (it pulls all 4,323 rows once) and 0.9 to 1.3 s for the other
+pages; cached renders 0.07 to 0.14 s. The sidebar's "Refresh data" button clears the cache
+after a new pipeline run.
+
+### What changed around the dashboard
+
+- `docker-compose.dev.yml` mounts source, config and tests into the containers for editing and
+  testing without a rebuild. It became necessary on 20 Nov when Smart App Control started
+  blocking a scikit-learn file in the local venv, so the API tests now run in the api container.
+- `POST /simulate` accepts `top_n = 0` and anything up to the whole book (it used to require at
+  least one contact).
+- `scripts/screenshot_pages.py` takes 1280x720 screenshots through the DevTools protocol; the
+  ones in `docs/screens/` are from the final run of the day.
+
+### What a data team might ask
+
+- *Why not show the SHAP values themselves?* The card shows the three largest positive
+  contributions as sentences and the family chips; the number itself (log-odds) means nothing
+  to a branch manager. The API still returns it.
+- *Is the save rate made up?* Yes, by design: it is the one input the bank must supply, so it is
+  a slider rather than a constant, and the page says so.
+- *What does the dashboard do if the pipeline reruns?* The api serves the old outputs until
+  `/reload`; the dashboard serves its cache until "Refresh data" or five minutes. Both are
+  deliberate: a demo should not change under the presenter.

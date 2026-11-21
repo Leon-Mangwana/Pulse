@@ -19,6 +19,7 @@ COPY src ./src
 COPY config ./config
 COPY api ./api
 COPY dashboard ./dashboard
+COPY .streamlit ./.streamlit
 COPY docker/entrypoint.sh ./docker/entrypoint.sh
 RUN pip install --no-cache-dir --no-deps --no-build-isolation ${PIP_FLAGS} -e . \
     && chmod +x docker/entrypoint.sh && mkdir -p data/raw data/processed models

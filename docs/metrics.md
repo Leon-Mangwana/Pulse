@@ -497,3 +497,54 @@ Tests (`python -m pytest`): 51 passed (9 new in `tests/test_api.py`).
 
 Online build on the same day failed twice on a 2 to 10 kB/s connection (pip read timeout after
 backtracking through matplotlib releases); the wheel cache path is the one to rely on.
+
+## Phase 7: dashboard and ROI simulator
+
+### Run 2026-11-20, same pipeline outputs as Phase 6 (snapshot 2026-10-31, 4,323 customers)
+
+**Pages** (`dashboard/app.py`, Streamlit 1.67, served by the dashboard container on :8501):
+Worklist, Customer card, Insights, ROI simulator. Screenshots at 1280x720 in `docs/screens/`.
+
+**API additions** (`api/main.py` 0.7.0): `GET /customers/{ref}/history` (12 month-ends: balance,
+money in, salary credit), `GET /drivers` (SHAP share by reason family plus top five readings),
+`POST /simulate` now accepts `top_n` from 0 to the whole book.
+
+**Headline numbers on the worklist** (all customers): 98 customers in the two "act" bands;
+22,374 USD total value at risk; 67% of it held by the top 433 customers (10% of the ranking).
+
+**Churn drivers by family** (`GET /drivers`, share of mean absolute SHAP at the latest snapshot):
+
+| driver | share of model impact (%) |
+| --- | --- |
+| Balance drain | 28.3 |
+| Income disruption | 26.1 |
+| Activity drop | 13.7 |
+| Life event | 12.6 |
+| Fees and friction | 8.1 |
+| New relationship | 5.8 |
+| Money leaving to wallets or other banks | 5.4 |
+
+**ROI simulator at the defaults** (2 USD per contact, 10 USD per save, 30% save rate):
+
+| customers contacted | Pulse net return USD | random net return USD | uplift USD |
+| --- | --- | --- | --- |
+| 0 | 0 | 0 | 0 |
+| 435 (peak of the Pulse line) | 3,368 | -232 | 3,600 |
+| 500 (default) | 3,361 | -266 | 3,628 |
+| 3,059 (Pulse line turns negative) | 0 | -1,629 | 1,629 |
+| 4,323 (everyone) | -2,303 | -2,303 | 0 |
+
+**Page render time** (Streamlit AppTest inside the container; budget 2 s):
+
+| page | first render s | cached render s |
+| --- | --- | --- |
+| Worklist | 4.43 | 0.07 |
+| Customer card | 0.86 | 0.10 |
+| Insights | 1.25 | 0.14 |
+| ROI simulator | 1.16 | 0.11 |
+
+**Tests**: 63 in total. 59 pass in the api container (`tests/test_dashboard_app.py` skips there,
+counted as 1) and the 4 page tests pass in the dashboard container against the live api. New in
+this phase: 3 API tests (history, drivers, simulate extremes), 5 dashboard logic tests, 4 page
+tests. The local venv can no longer import scikit-learn (Smart App Control), so the suite runs
+with `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps api python -m pytest -q`.
