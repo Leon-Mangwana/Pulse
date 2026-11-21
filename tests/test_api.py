@@ -111,7 +111,7 @@ def test_simulate_targeted_beats_random(client):
     assert t["revenue_protected_usd"] > rnd["revenue_protected_usd"]
     assert abs(s["uplift_net_usd"] - (t["net_return_usd"] - rnd["net_return_usd"])) < 0.02
     assert abs(t["total_cost_usd"] - (t["contact_cost_usd"] + t["incentive_cost_usd"])) < 0.02
-    assert client.post("/simulate", json={"top_n": 0}).status_code == 422
+    assert client.post("/simulate", json={"top_n": -1}).status_code == 422
     assert client.post("/simulate", json={"save_rate": 2}).status_code == 422
 
 
@@ -143,3 +143,40 @@ def test_psi_zero_for_same_data_and_large_for_a_shift():
     assert monitor.psi(a, a + 1.0) > 0.25
     assert monitor.psi(np.ones(100), np.ones(100) * 3) == 0.0            # constant in training: not measurable
     assert monitor.psi_status(0.05, 0.1, 0.25) == "stable" and monitor.psi_status(0.3, 0.1, 0.25) == "investigate"
+
+
+# ----------------------------------------------------------------------------- Phase 7 additions
+def test_history_twelve_months_and_404(client):
+    ref = client.get("/worklist", params={"limit": 1}).json()["rows"][0]["customer_ref"]
+    r = client.get(f"/customers/{ref}/history")
+    assert r.status_code == 200
+    h = r.json()
+    assert h["customer_ref"] == ref and 1 <= h["months"] <= 12 and len(h["points"]) == h["months"]
+    months = [p["month"] for p in h["points"]]
+    assert months == sorted(months)
+    assert all(p["salary_credit_usd"] >= 0 and p["money_in_usd"] >= 0 for p in h["points"])
+    assert client.get("/customers/C000001/history").status_code == 404
+
+
+def test_drivers_by_family_in_plain_english(client):
+    r = client.get("/drivers")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["families"] and abs(sum(f["share_pct"] for f in d["families"]) - 100) < 1.5
+    shares = [f["share_pct"] for f in d["families"]]
+    assert shares == sorted(shares, reverse=True)
+    assert all(" " in f["label"] or f["label"].istitle() for f in d["families"])      # labels, not feature names
+    assert all("_" not in f["label"] for f in d["families"])
+    assert all("_" not in s["reading"].split(" ")[0] for s in d["top_signals"])
+
+
+def test_simulate_extremes_zero_and_everyone(client):
+    total = client.get("/health").json()["customers"]
+    zero = client.post("/simulate", json={"top_n": 0}).json()
+    for side in ("targeted", "random"):
+        assert zero[side]["contacted"] == 0 and zero[side]["net_return_usd"] == 0 and zero[side]["return_per_usd"] is None
+    everyone = client.post("/simulate", json={"top_n": total * 3}).json()
+    t, rnd = everyone["targeted"], everyone["random"]
+    assert t["contacted"] == rnd["contacted"] == total
+    assert abs(t["revenue_protected_usd"] - rnd["revenue_protected_usd"]) < 0.05 * max(1.0, t["revenue_protected_usd"])
+    assert abs(everyone["uplift_net_usd"]) < 0.05 * max(1.0, abs(t["net_return_usd"]))
