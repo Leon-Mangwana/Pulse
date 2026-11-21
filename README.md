@@ -25,8 +25,12 @@ py -3.11 -m venv .venv
 | score | (same command) | also writes the action cards `data/processed/cards.json` (three templated reasons, action, call script, next best product per customer), `shap_latest.parquet`, the segment view `segments.parquet`/`.csv` and `models/shap_summary.md`; `python -m pulse.cli explain` rebuilds these from a saved worklist |
 | monitor | `python -m pulse.cli monitor` | appends a run-log line to `data/processed/runs.jsonl` and writes the feature drift report (PSI per feature, latest snapshot vs the training block) to `models/drift_report.md` and `data/processed/drift.parquet` |
 | pipeline | `python -m pulse.cli pipeline` | ingest, features, train, score, monitor in order, with the time each step took |
-| api | `.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload` | FastAPI on http://localhost:8000 (docs at `/docs`): `/health`, `/worklist`, `/customers/{ref}/card`, `/segments`, `/metrics`, `POST /simulate`, `POST /reload` |
+| api | `.\.venv\Scripts\python.exe -m uvicorn api.main:app --reload` | FastAPI on http://localhost:8000 (docs at `/docs`): `/health`, `/worklist`, `/customers/{ref}/card`, `/segments`, `/metrics`, `POST /simulate`, `POST /reload`; Phase 7 adds `/customers/{ref}/history` and `/drivers` |
 | docker | `docker compose up` | api on :8000 and dashboard on :8501 sharing `./data` and `./models`; see `docs/runbook-docker.md` for offline builds |
+| dashboard | (part of `docker compose up`) | Streamlit on http://localhost:8501: Worklist, Customer card, Insights, ROI simulator, all read from the api; `dashboard/app.py` |
+| dev | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` | same, with `src/`, `api/`, `dashboard/`, `config/`, `tests/` mounted so edits apply without a rebuild |
+| tests | `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm dashboard python -m pytest -q tests/test_dashboard_app.py` | renders the four pages against the live api; the rest of the suite runs with `python -m pytest` (in the api container on machines where scikit-learn is blocked) |
+| screens | `python scripts/screenshot_pages.py docs/screens` | 1280x720 screenshots of the four pages with headless Edge |
 | pipeline | `python -m pulse.cli pipeline` | run every built step in order with timings |
 | tests | `python -m pytest` | run the test suite |
 
