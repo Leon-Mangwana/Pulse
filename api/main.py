@@ -1,4 +1,4 @@
-"""Pulse scoring API: serves the pipeline outputs, never raw data (Phase 6).
+"""Pulse scoring API: serves the pipeline outputs, never raw data (Phase 6; history and drivers added in Phase 7).
 
     uvicorn api.main:app --reload            (from the project root)
 
@@ -16,6 +16,7 @@ from typing import Any, Literal
 import json
 import numpy as np
 import pandas as pd
+import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
@@ -23,6 +24,11 @@ from pulse.config import PROJECT_ROOT, load_settings, resolve
 from pulse.io import read_parquet
 from pulse.models import churn
 from pulse.monitor import DRIFT_FILE, drift_summary, read_runs
+from pulse.pseudo import pseudonymise
+
+HISTORY_MONTHS = 12
+HISTORY_COLS = ["customer_id", "snapshot_date", "bal_end_usd", "income_1m_usd", "salary_detected",
+                "months_since_salary", "salary_amount_usd"]
 
 WORKLIST_FIELDS = ["customer_ref", "rank", "segment", "branch", "p_churn_90d", "p_churn_30d", "value_12m_usd",
                    "value_at_risk_usd", "urgency", "recommendation", "rec_source", "rec_reason"]
@@ -93,6 +99,38 @@ class Card(BaseModel):
     next_best_product: NextBestProduct
 
 
+class HistoryPoint(BaseModel):
+    month: str = Field(description="month-end snapshot date")
+    balance_usd: float = Field(description="month-end balance across all accounts")
+    money_in_usd: float = Field(description="all credits in the month, excluding own-account transfers")
+    salary_credit_usd: float = Field(description="the regular salary-sized credit if it arrived that month, else 0")
+
+
+class HistoryResponse(BaseModel):
+    customer_ref: str
+    months: int
+    points: list[HistoryPoint]
+
+
+class DriverFamily(BaseModel):
+    family: str
+    label: str = Field(description="plain-English name of the reason family")
+    share_pct: float = Field(description="share of total model impact across the latest snapshot")
+    customers_pushed_up_pct: float = Field(description="share of customers for whom this family raises the risk")
+
+
+class DriverFeature(BaseModel):
+    family_label: str
+    reading: str = Field(description="plain-English reading of the signal")
+    share_pct: float
+
+
+class DriversResponse(BaseModel):
+    snapshot_date: str
+    families: list[DriverFamily]
+    top_signals: list[DriverFeature]
+
+
 class SegmentRow(BaseModel):
     dimension: str
     group: str
@@ -138,7 +176,7 @@ class Metrics(BaseModel):
 
 
 class SimulateRequest(BaseModel):
-    top_n: int = Field(500, ge=1, description="customers contacted, from the top of the value-at-risk ranking")
+    top_n: int = Field(500, ge=0, description="customers contacted, from the top of the value-at-risk ranking (0 allowed)")
     cost_per_contact: float = Field(2.0, ge=0, description="USD per customer contacted")
     incentive_cost: float = Field(10.0, ge=0, description="USD per customer actually saved")
     save_rate: float = Field(0.30, ge=0, le=1, description="share of would-be churners a contact retains")
@@ -187,7 +225,46 @@ class Store:
         drift_path = processed / DRIFT_FILE
         self.drift = drift_summary(read_parquet(drift_path)) if drift_path.exists() else None
         self.runs = read_runs(resolve(self.root, self.settings["monitor"]["runs_log"]))
+        self.history = self._load_history(processed / "features.parquet")
+        self.drivers = self._load_drivers(model_dir / "shap_summary.json")
         self.loaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+    def _load_history(self, path: Path) -> pd.DataFrame:
+        """Last HISTORY_MONTHS snapshots per customer, keyed by pseudonymised reference; raw ids dropped."""
+        if not path.exists():
+            return pd.DataFrame(columns=["customer_ref", "month", "balance_usd", "money_in_usd", "salary_credit_usd"])
+        f = read_parquet(path)[HISTORY_COLS]
+        keep = sorted(f["snapshot_date"].unique())[-HISTORY_MONTHS:]
+        f = f[f["snapshot_date"].isin(keep)].copy()
+        pcfg = self.settings["pseudonymise"]
+        f["customer_ref"] = pseudonymise(f["customer_id"], pcfg["salt"], int(pcfg["length"]))
+        arrived = (f["salary_detected"] > 0) & (f["months_since_salary"] == 0)
+        out = pd.DataFrame({"customer_ref": f["customer_ref"],
+                            "month": pd.to_datetime(f["snapshot_date"]).dt.strftime("%Y-%m-%d"),
+                            "balance_usd": f["bal_end_usd"].round(2), "money_in_usd": f["income_1m_usd"].round(2),
+                            "salary_credit_usd": f["salary_amount_usd"].where(arrived, 0.0).round(2)})
+        return out.sort_values(["customer_ref", "month"]).reset_index(drop=True)
+
+    def _load_drivers(self, path: Path) -> DriversResponse | None:
+        """Bank-wide drivers: SHAP share by reason family plus the top signals' plain-English readings."""
+        if not path.exists():
+            return None
+        summary = json.loads(path.read_text(encoding="utf-8"))
+        families = yaml.safe_load(resolve(self.root, self.settings["explain"]["reasons_path"]).read_text(encoding="utf-8"))["families"]
+        readings = {r["feature"]: r["reading"] for r in self.metrics.get("top_features", [])}
+        df = pd.DataFrame(summary)
+        df = df[df["family"].isin(families)]
+        total = df["mean_abs_shap"].sum()
+        fam = (df.groupby("family").agg(impact=("mean_abs_shap", "sum"), up=("pushes_up_%", "max"))
+               .sort_values("impact", ascending=False))
+        fam_rows = [DriverFamily(family=k, label=families[k], share_pct=round(100 * r.impact / total, 1) if total else 0.0,
+                                 customers_pushed_up_pct=round(float(r.up), 1)) for k, r in fam.iterrows()]
+        top = df.sort_values("mean_abs_shap", ascending=False)
+        top = top[top["feature"].isin(readings)].head(5)
+        sig = [DriverFeature(family_label=families[r.family], reading=readings[r.feature],
+                             share_pct=round(100 * r.mean_abs_shap / total, 1) if total else 0.0) for r in top.itertuples()]
+        return DriversResponse(snapshot_date=self.snapshot_date, families=fam_rows, top_signals=sig)
 
 
 def simulate(worklist: pd.DataFrame, req: SimulateRequest) -> SimulateResponse:
@@ -225,7 +302,7 @@ def simulate(worklist: pd.DataFrame, req: SimulateRequest) -> SimulateResponse:
 # ----------------------------------------------------------------------------- app
 def create_app(root: Path | None = None) -> FastAPI:
     root = Path(root or os.environ.get("PULSE_ROOT", PROJECT_ROOT))
-    app = FastAPI(title="Pulse scoring API", version="0.6.0",
+    app = FastAPI(title="Pulse scoring API", version="0.7.0",
                   description="Churn risk, value at risk, next best product and action cards from the Pulse pipeline. "
                               "Customer references are pseudonymised.")
     app.state.root = root
@@ -273,6 +350,21 @@ def create_app(root: Path | None = None) -> FastAPI:
         if c is None:
             raise HTTPException(404, "no card for this customer reference at the latest snapshot")
         return c
+
+    @app.get("/customers/{customer_ref}/history", response_model=HistoryResponse,
+             summary="Balance, money in and salary credits over the last 12 month-ends")
+    def history(customer_ref: str, store: Store = Depends(get_store)):
+        h = store.history[store.history["customer_ref"] == customer_ref.upper()]
+        if h.empty:
+            raise HTTPException(404, "no history for this customer reference")
+        pts = h.drop(columns="customer_ref").to_dict("records")
+        return HistoryResponse(customer_ref=customer_ref.upper(), months=len(pts), points=pts)
+
+    @app.get("/drivers", response_model=DriversResponse, summary="Bank-wide churn drivers by reason family, in plain English")
+    def drivers(store: Store = Depends(get_store)):
+        if store.drivers is None:
+            raise HTTPException(503, "no SHAP summary yet; run the pipeline")
+        return store.drivers
 
     @app.get("/segments", response_model=SegmentsResponse, summary="Churn risk and value at risk by branch, segment and product")
     def segments(dimension: Literal["branch", "segment", "product"] | None = None, store: Store = Depends(get_store)):
