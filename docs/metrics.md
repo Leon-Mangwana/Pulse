@@ -548,3 +548,28 @@ counted as 1) and the 4 page tests pass in the dashboard container against the l
 this phase: 3 API tests (history, drivers, simulate extremes), 5 dashboard logic tests, 4 page
 tests. The local venv can no longer import scikit-learn (Smart App Control), so the suite runs
 with `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps api python -m pytest -q`.
+
+## Phase 8: rehearsal datasets, fallback mode, runbook (21 Nov 2026)
+
+**Rehearsal datasets** (`scripts/make_rehearsal.py`, seed 2026): `data/rehearsal/a/` three files,
+100 MB; `data/rehearsal/b/` one file, 0.3 MB. Both verified privately end to end (ingest to API)
+through a schema file alone, no code change. Numbers withheld on purpose; the rehearsal log in
+`docs/runbook.md` is where yours go.
+
+**Fallback mode on the module test table** (`tests/test_summary_mode.py`, 1,200 customers, planted
+signal in tenure, activity, balance and complaints): stratified split 720 / 240 / 240 rows with
+equal churn rates; logistic and LightGBM only (rules baseline needs transaction features);
+test ROC-AUC above 0.6; deterministic across two runs; fairness table on gender and age band;
+cards for more than 80% of customers from `config/reasons_summary.yaml`; API serves worklist,
+card (history 404), drivers, metrics with `mode: summary` and `drift: null`, simulate.
+
+**Pipeline in transaction mode** unchanged: 150 to 181 s on this laptop.
+
+**Tests**: 66 in total. 61 pass in the api container plus 1 skipped module (the 4 page tests,
+which pass in the dashboard container). New: 2 in `tests/test_summary_mode.py` (mode detection,
+fallback pipeline end to end).
+
+| run | command | result |
+| --- | --- | --- |
+| whole suite | `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps api python -m pytest -q` | 61 passed, 1 skipped, 89 s |
+| page tests | `... run --rm dashboard python -m pytest -q tests/test_dashboard_app.py` | 4 passed, 7 s |
