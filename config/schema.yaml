@@ -4,8 +4,40 @@
 # `path` at the bank's files and edit the right-hand side of each mapping.
 #
 # Optional per file:
-#   date_format: strptime pattern used for every date column in that file
-#   values:      map raw category values to canonical ones, e.g. direction: {CR: credit, DR: debit}
+#   date_format:  strptime pattern used for every date column in that file
+#   date_formats: pattern per canonical column, overriding date_format, e.g. {open_date: "%d/%m/%Y"}
+#   values:       map raw category values to canonical ones, e.g. direction: {CR: credit, DR: debit}
+#   distinct:     true drops exact duplicate rows after renaming
+#   one_row_per_key: true collapses several rows per primary key into one, keeping the first
+#                 non-null value of each column (a file with one row per account can then be
+#                 mapped as the customers table as well as the accounts table)
+#
+# Two tables may point at the same file. Another schema file can be used without editing this one:
+#   $env:PULSE_SCHEMA = "config/schema.rehearsal.yaml"
+#
+# FALLBACK MODE (no transactions): map a single customer-level table instead of the four below
+# and delete or comment out the four. Required: customer_id and churn_flag. Everything under
+# features: becomes a model input (numbers; yes/no words become 1/0). See docs/runbook.md for
+# what Pulse can and cannot claim in this mode.
+#
+# customer_summary:
+#   path: data/raw/customer_base.csv
+#   date_format: "%Y-%m-%d"
+#   columns:
+#     customer_id: cust_id
+#     churn_flag: churned            # 1/0, yes/no, true/false, or a values map below
+#     snapshot_date: as_of_date      # optional: the date the row describes (else settings end_date)
+#     segment: segment               # optional
+#     branch: branch                 # optional
+#     gender: gender                 # protected: fairness check only, never a model input
+#     age_band: age_band             # protected: fairness check only, never a model input
+#   features:                        # canonical name (your choice, plain identifier) -> source column
+#     tenure_months: months_with_bank
+#     balance_usd: avg_balance
+#     n_products: num_products
+#     active_flag: is_active
+#   values:
+#     churn_flag: {Y: 1, N: 0}
 
 customers:
   path: data/raw/customers.csv
