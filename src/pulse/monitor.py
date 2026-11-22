@@ -59,6 +59,10 @@ def drift_report(feats: pd.DataFrame, settings: dict, latest_date=None) -> pd.Da
     """PSI per feature: latest snapshot vs the training block (snapshot_date <= model.split.train_end)."""
     mcfg = settings["monitor"]
     train_end = pd.Timestamp(settings["model"]["split"]["train_end"])
+    if feats["snapshot_date"].nunique() < 2:
+        # fallback mode: one snapshot, nothing to compare against yet
+        return pd.DataFrame(columns=["feature", "psi", "status", "train_mean", "latest_mean", "train_rows",
+                                     "latest_rows", "train_to", "latest_snapshot"])
     latest_date = pd.Timestamp(latest_date) if latest_date is not None else feats["snapshot_date"].max()
     train = feats[feats["snapshot_date"] <= train_end]
     latest = feats[feats["snapshot_date"] == latest_date]
@@ -77,7 +81,10 @@ def drift_report(feats: pd.DataFrame, settings: dict, latest_date=None) -> pd.Da
     return pd.DataFrame(rows).sort_values("psi", ascending=False).reset_index(drop=True)
 
 
-def drift_summary(drift: pd.DataFrame) -> dict:
+def drift_summary(drift: pd.DataFrame) -> dict | None:
+    """Counts by status and the top features; None when there is no report (one snapshot only)."""
+    if drift is None or len(drift) == 0:
+        return None
     counts = drift["status"].value_counts().to_dict()
     top = drift.head(5)[["feature", "psi", "status"]].to_dict("records")
     return {"features": int(len(drift)), "stable": int(counts.get("stable", 0)), "watch": int(counts.get("watch", 0)),
@@ -103,8 +110,8 @@ def run_record(worklist: pd.DataFrame, feats: pd.DataFrame, drift: pd.DataFrame 
         "value_at_risk_usd": round(float(worklist["value_at_risk_usd"].sum()), 2),
         "recommendations": worklist["rec_source"].value_counts().to_dict(),
     }
-    if drift is not None:
-        s = drift_summary(drift)
+    s = drift_summary(drift)
+    if s is not None:
         rec["drift"] = {k: s[k] for k in ("stable", "watch", "investigate", "max_psi")}
     return rec
 
@@ -127,6 +134,10 @@ def read_runs(path: Path, last: int | None = None) -> list[dict]:
 # ----------------------------------------------------------------------------- CLI
 def drift_markdown(drift: pd.DataFrame, settings: dict, n: int = 20) -> str:
     mcfg, s = settings["monitor"], drift_summary(drift)
+    if s is None:
+        return ("# Feature drift report" + chr(10) * 2 + "No report: the feature table has a single snapshot "
+                "(fallback mode), so there is no training block to compare the latest month against. Drift "
+                "becomes measurable once a second extract arrives." + chr(10))
     head = (f"# Feature drift report\n\nLatest snapshot {s['latest_snapshot']} ({int(drift['latest_rows'].iloc[0]):,} rows) "
             f"against the training block to {s['train_to']} ({int(drift['train_rows'].iloc[0]):,} rows), "
             f"{int(mcfg['psi_bins'])} quantile bins fixed on training.\n\n"
@@ -158,8 +169,11 @@ def main(root: Path = PROJECT_ROOT, log=print) -> dict:
     log(f"run log: appended to {runs_path.name} ({len(read_runs(runs_path))} runs); "
         f"{record['customers_scored']:,} customers at {record['snapshot_date']}, mean p {record['p_churn_mean']:.3%}, "
         f"p90 {record['p_churn_p90']:.3%}, value at risk {record['value_at_risk_usd']:,.0f} USD")
-    log(f"drift: {s['stable']} stable, {s['watch']} watch, {s['investigate']} investigate (max PSI {s['max_psi']:.3f})")
-    log("top 10 by PSI\n" + drift.head(10)[["feature", "psi", "status", "train_mean", "latest_mean"]].round(3).to_string(index=False))
+    if s is None:
+        log("drift: no report (single snapshot); the run is logged")
+    else:
+        log(f"drift: {s['stable']} stable, {s['watch']} watch, {s['investigate']} investigate (max PSI {s['max_psi']:.3f})")
+        log("top 10 by PSI\n" + drift.head(10)[["feature", "psi", "status", "train_mean", "latest_mean"]].round(3).to_string(index=False))
     log(f"monitored in {time.perf_counter() - t0:.1f}s")
     return {"drift": drift, "run": record}
 
