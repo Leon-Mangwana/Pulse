@@ -25,9 +25,10 @@ import pandas as pd
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from pulse.config import PROJECT_ROOT, load_settings, resolve
+from pulse.config import PROJECT_ROOT, current_mode, load_settings, resolve
 from pulse.features.build import FAMILIES, feature_names
 from pulse.io import read_parquet
 
@@ -60,6 +61,19 @@ def time_split(feats: pd.DataFrame, cfg: dict, horizon_days: int) -> Split:
     d = lab["snapshot_date"]
     return Split(train=lab[d <= train_end], valid=lab[(d > train_end) & (d <= valid_end)],
                  test=lab[d >= test_start])
+
+
+def stratified_split(feats: pd.DataFrame, cfg: dict, seed: int) -> Split:
+    """Fallback mode only: one snapshot, so no time axis. A seeded stratified random split keeps
+    the churn rate equal in train, validation and test. Optimistic compared with a time split."""
+    s = cfg["summary_split"]
+    valid_share, test_share = float(s["valid_share"]), float(s["test_share"])
+    lab = feats[feats["labelled"] == 1]
+    y = lab["churn_90d"].to_numpy(int)
+    rest, test = train_test_split(lab, test_size=test_share, stratify=y, random_state=seed)
+    train, valid = train_test_split(rest, test_size=valid_share / (1 - test_share),
+                                    stratify=rest["churn_90d"].to_numpy(int), random_state=seed)
+    return Split(train=train, valid=valid, test=test)
 
 
 def describe_split(split: Split) -> pd.DataFrame:
@@ -211,7 +225,13 @@ def top_features(booster: lgb.Booster, names: list[str], X: pd.DataFrame, y: np.
     df = pd.DataFrame({"feature": names, "gain_%": 100 * gain / gain.sum()}).sort_values("gain_%", ascending=False)
     df = df.head(n).reset_index(drop=True)
     df["gain_%"] = df["gain_%"].round(1)
-    df["reading"] = [f"{desc[f]}; churners have {direction[f]} values" for f in df["feature"]]
+    def describe(f: str) -> str:   # mapped summary-mode columns have no dictionary entry
+        if f in desc:
+            return desc[f]
+        if f.endswith("_missing"):
+            return f"1 when {f[:-8].replace('_', ' ')} was empty in the source table"
+        return f"{f.replace('_', ' ')}, as supplied in the source table"
+    df["reading"] = [f"{describe(f)}; churners have {direction[f]} values" for f in df["feature"]]
     return df
 
 
@@ -256,12 +276,22 @@ def load_protected(root: Path, settings: dict) -> pd.DataFrame:
 
 # --------------------------------------------------------------------------- train
 def train(feats: pd.DataFrame, settings: dict, attrs: pd.DataFrame | None = None, out_dir: Path | None = None,
-          log=print) -> dict:
-    """Run the whole Phase 2 recipe on a feature table. Returns the metrics dict; saves to out_dir if given."""
+          log=print, names: list[str] | None = None, split_mode: str = "time") -> dict:
+    """Run the whole Phase 2 recipe on a feature table. Returns the metrics dict; saves to out_dir if given.
+
+    `names` defaults to the transaction feature list; fallback mode passes the mapped columns.
+    `split_mode` is "time" (always, when there is a time axis) or "stratified" (fallback mode only)."""
     cfg, seed = settings["model"], int(settings["seed"])
-    names = feature_names()
+    names = list(names) if names is not None else feature_names()
     assert not set(PROTECTED) & set(names), "protected attributes must never be model inputs"
-    split = time_split(feats, cfg, int(settings["target"]["horizon_days"]))
+    if split_mode == "time":
+        split = time_split(feats, cfg, int(settings["target"]["horizon_days"]))
+    elif split_mode == "stratified":
+        split = stratified_split(feats, cfg, seed)
+    else:
+        raise ValueError(f"unknown split_mode {split_mode!r}")
+    rules_ok = all(c in names for c in ("salary_detected", "months_since_salary", "bal_change_vs_6m",
+                                        "txn_count_change", "leak_share_trend"))
     shares = [float(s) for s in cfg["top_shares"]]
     md: list[str] = []
 
@@ -274,19 +304,31 @@ def train(feats: pd.DataFrame, settings: dict, attrs: pd.DataFrame | None = None
             md.append(to_markdown(obj) if isinstance(obj, pd.DataFrame) else f"```\n{text}\n```")
 
     split_df = describe_split(split)
-    section("Time split (labelled snapshots only; the gap before the test block is dropped)", split_df)
+    section("Time split (labelled snapshots only; the gap before the test block is dropped)" if split_mode == "time"
+            else "Stratified random split (fallback mode: no time axis; results are optimistic)", split_df)
 
     X = {k: df[names] for k, df in split.blocks()}
     y = {k: df["churn_90d"].to_numpy(int) for k, df in split.blocks()}
 
     t0 = time.perf_counter()
-    scores: dict[str, dict[str, np.ndarray]] = {"rules": {k: rules_score(X[k], cfg["rules"]) for k in X}}
+    scores: dict[str, dict[str, np.ndarray]] = {}
+    if rules_ok:
+        scores["rules"] = {k: rules_score(X[k], cfg["rules"]) for k in X}
+    else:
+        log("rules baseline skipped: its hand-made flags need transaction features")
     logit = LogisticModel(cfg["logistic"], seed).fit(X["train"], y["train"])
     scores["logistic"] = {k: logit.predict(X[k]) for k in X}
-    booster, candidates = fit_lightgbm(X["train"], y["train"], X["valid"], y["valid"], cfg["lightgbm"], seed)
+    lgb_cfg = cfg["lightgbm"]
+    if split_mode == "stratified":
+        # customer-level tables are small (thousands of rows, not tens of thousands of customer-months):
+        # scale the leaf-size floor to the data so the trees can split at all
+        floor = max(20, int(0.02 * len(X["train"])))
+        lgb_cfg = {**lgb_cfg, "candidates": [{**c, "min_child_samples": min(int(c["min_child_samples"]), floor)}
+                                             for c in lgb_cfg["candidates"]]}
+    booster, candidates = fit_lightgbm(X["train"], y["train"], X["valid"], y["valid"], lgb_cfg, seed)
     raw = {k: booster.predict(X[k], num_iteration=booster.best_iteration) for k in X}
     scores["lightgbm"] = raw
-    log(f"\nfit three models in {time.perf_counter() - t0:.1f}s")
+    log(f"\nfit {len(scores)} models in {time.perf_counter() - t0:.1f}s")
     section("LightGBM candidates, chosen on the validation block (test never looked at)", candidates)
 
     # --- comparison on the test block
@@ -347,6 +389,7 @@ def train(feats: pd.DataFrame, settings: dict, attrs: pd.DataFrame | None = None
 
     metrics = {
         "run_date": pd.Timestamp.today().strftime("%Y-%m-%d"), "seed": seed, "n_features": len(names),
+        "mode": "summary" if split_mode == "stratified" else "transactions", "split_mode": split_mode,
         "split": split_df.astype(str).to_dict(orient="records"),
         "comparison_test": comparison.to_dict(orient="records"),
         "lightgbm": {"best_iteration": int(booster.best_iteration), "params": booster.params,
@@ -397,7 +440,15 @@ def main(root: Path = PROJECT_ROOT) -> dict:
     feats["snapshot_date"] = pd.to_datetime(feats["snapshot_date"])
     print(f"loaded {len(feats):,} snapshot rows ({int(feats['labelled'].sum()):,} labelled) in {time.perf_counter() - t0:.1f}s")
     attrs = load_protected(root, settings)
-    metrics = train(feats, settings, attrs=attrs, out_dir=resolve(root, MODEL_DIR))
+    if attrs[PROTECTED].isna().all().all():
+        attrs = None
+        print("no protected attributes mapped: fairness table skipped")
+    if current_mode(root) == "summary":
+        from pulse.summary_mode import feature_names_from
+        metrics = train(feats, settings, attrs=attrs, out_dir=resolve(root, MODEL_DIR),
+                        names=feature_names_from(feats), split_mode="stratified")
+    else:
+        metrics = train(feats, settings, attrs=attrs, out_dir=resolve(root, MODEL_DIR))
     print(f"\ntrained in {time.perf_counter() - t0:.1f}s")
     return metrics
 
