@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pulse.config import PROJECT_ROOT, load_settings, load_yaml, resolve
+from pulse.config import PROJECT_ROOT, current_mode, load_settings, load_yaml, resolve
 from pulse.crosssell import OPS, fill, products_held
 from pulse.io import read_parquet, write_parquet
 from pulse.models import churn
@@ -56,8 +56,13 @@ def variants(spec: dict) -> list[dict]:
     return [{"when": spec.get("when", []), "template": spec["template"]}]
 
 
-def load_reasons(root: Path, settings: dict) -> dict:
-    cfg = load_yaml(resolve(root, settings["explain"]["reasons_path"]))
+def load_reasons(root: Path, settings: dict, mode: str = "transactions") -> dict:
+    key = "reasons_path_summary" if mode == "summary" else "reasons_path"
+    cfg = load_yaml(resolve(root, settings["explain"][key]))
+    cfg.setdefault("features", {})
+    if cfg.get("generic"):
+        if cfg["generic"]["family"] not in cfg["families"] or not cfg["generic"].get("template"):
+            raise ValueError("generic reason needs a known family and a template")
     for name, spec in cfg["features"].items():
         if spec["family"] not in cfg["families"]:
             raise ValueError(f"reason {name}: unknown family {spec['family']!r}")
@@ -92,6 +97,9 @@ def raw_score(model_dir: Path, rows: pd.DataFrame) -> np.ndarray:
 def global_summary(contrib: pd.DataFrame, reasons: dict, n: int = 15) -> pd.DataFrame:
     """Top features by mean |SHAP| over the rows given, with how often each pushes a score up."""
     fam = {f: s["family"] for f, s in reasons["features"].items()}
+    generic = reasons.get("generic")
+    if generic:
+        fam = {c: fam.get(c, generic["family"]) for c in contrib.columns}
     df = pd.DataFrame({
         "feature": contrib.columns,
         "mean_abs_shap": contrib.abs().mean().to_numpy(),
@@ -122,21 +130,31 @@ def holds(values: dict, conds: list) -> bool:
     return all(f in values and bool(OPS[op](values[f], v)) for f, op, v in conds)
 
 
-def pick_reasons(values: dict, contrib_row: pd.Series, reasons: dict, n: int = 3) -> list[dict]:
-    """Top-n positive contributions with a template, one per family, conditions satisfied."""
+def pick_reasons(values: dict, contrib_row: pd.Series, reasons: dict, n: int = 3,
+                 typical: dict | None = None) -> list[dict]:
+    """Top-n positive contributions with a template, one per family, conditions satisfied.
+
+    `typical` (fallback mode) maps feature -> median among customers who stayed; it fills the
+    {typical} placeholder and lets the `generic` template describe an unmapped column."""
     specs, labels = reasons["features"], reasons["families"]
+    generic = reasons.get("generic")
+    typical = typical or {}
     out, used = [], set()
     for feature, s in contrib_row.sort_values(ascending=False).items():
         if s <= 0 or len(out) >= n:
             break
         spec = specs.get(feature)
+        if spec is None and generic and feature in values and not feature.endswith("_missing"):
+            spec = generic
         if spec is None or spec["family"] in used:
             continue
-        template = next((v["template"] for v in variants(spec) if holds(values, v.get("when", []))), None)
+        vals = {**values, "label": feature.replace("_", " ").capitalize(), "value": values.get(feature),
+                "typical": typical.get(feature, float("nan"))}
+        template = next((v["template"] for v in variants(spec) if holds(vals, v.get("when", []))), None)
         if template is None:
             continue
         out.append({"feature": feature, "family": spec["family"], "family_label": labels[spec["family"]],
-                    "contribution": round(float(s), 4), "text": fill(template, values)})
+                    "contribution": round(float(s), 4), "text": fill(template, vals)})
         used.add(spec["family"])
     return out
 
@@ -154,8 +172,14 @@ def align_rows(worklist: pd.DataFrame, rows: pd.DataFrame, settings: dict) -> pd
     return rows.loc[worklist["customer_ref"]].reset_index()
 
 
+def typical_values(rows: pd.DataFrame, names: list[str]) -> dict:
+    """Median of each model input among customers who stayed (fallback mode card sentences)."""
+    stay = rows[rows["churn_90d"] == 0] if "churn_90d" in rows.columns and (rows["churn_90d"] == 0).any() else rows
+    return {c: float(stay[c].median()) for c in names if c in stay.columns}
+
+
 def build_cards(worklist: pd.DataFrame, rows: pd.DataFrame, contrib: pd.DataFrame, reasons: dict,
-                actions: dict, n_reasons: int = 3) -> list[dict]:
+                actions: dict, n_reasons: int = 3, typical: dict | None = None) -> list[dict]:
     """One card per worklist row; rows and contrib must be aligned with the worklist (same order)."""
     cards = []
     feature_cols = [c for c in rows.columns if c not in ("customer_id", "customer_ref")]
@@ -166,7 +190,7 @@ def build_cards(worklist: pd.DataFrame, rows: pd.DataFrame, contrib: pd.DataFram
         values = aliases({**row_records[i],
                           **{c: w[c] for c in ("value_at_risk_usd", "value_12m_usd", "p_churn_90d",
                                                "urgency", "recommendation")}})
-        picked = pick_reasons(values, pd.Series(cvals[i], index=names), reasons, n_reasons)
+        picked = pick_reasons(values, pd.Series(cvals[i], index=names), reasons, n_reasons, typical)
         family = picked[0]["family"] if picked else None
         block = actions["families"].get(family, actions["default"])
         card = {f: (w[f].item() if hasattr(w[f], "item") else w[f]) for f in CARD_FIELDS}
@@ -184,11 +208,13 @@ def build_cards(worklist: pd.DataFrame, rows: pd.DataFrame, contrib: pd.DataFram
 # ----------------------------------------------------------------------------- segments
 def segment_table(worklist: pd.DataFrame, rows: pd.DataFrame, products: pd.DataFrame) -> pd.DataFrame:
     """Churn risk and value at risk by branch, segment and product held at the snapshot."""
-    names = sorted(products["product"].dropna().unique())
-    held = products_held(rows, products, names)
+    names = sorted(products["product"].dropna().unique()) if len(products) else []
+    held = products_held(rows, products, names) if names else None
     frames = []
     for dim in SEGMENT_DIMS:
         if dim == "product":
+            if not names:
+                continue
             long = pd.concat([worklist.loc[held[p].to_numpy()].assign(group=p) for p in names], ignore_index=True)
         else:
             long = worklist.assign(group=worklist[dim])
@@ -229,23 +255,25 @@ def card_text(card: dict) -> str:
 
 
 def explain_snapshot(worklist: pd.DataFrame, rows: pd.DataFrame, settings: dict, model_dir: Path,
-                     root: Path = PROJECT_ROOT) -> dict:
+                     root: Path = PROJECT_ROOT, mode: str = "transactions") -> dict:
     """Cards, contributions and the global summary for one worklist, nothing written."""
     ecfg = settings["explain"]
-    reasons, actions = load_reasons(root, settings), load_actions(root, settings)
+    reasons, actions = load_reasons(root, settings, mode), load_actions(root, settings)
     rows = align_rows(worklist, rows, settings)
     contrib, base = contributions(Path(model_dir), rows)
-    cards = build_cards(worklist, rows, contrib, reasons, actions, int(ecfg["n_reasons"]))
+    typical = typical_values(rows, list(contrib.columns)) if mode == "summary" else None
+    cards = build_cards(worklist, rows, contrib, reasons, actions, int(ecfg["n_reasons"]), typical)
     summary = global_summary(contrib, reasons, int(ecfg["summary_top"]))
     return {"cards": cards, "contrib": contrib, "base": base, "summary": summary, "rows": rows}
 
 
 def run(worklist: pd.DataFrame, rows: pd.DataFrame, products: pd.DataFrame, settings: dict, model_dir: Path,
-        processed_dir: Path, root: Path = PROJECT_ROOT, log=print) -> dict:
+        processed_dir: Path, root: Path = PROJECT_ROOT, log=print, mode: str | None = None) -> dict:
     """Build and write cards.json, shap_latest.parquet, segments.parquet/.csv and the SHAP summary."""
     t0 = time.perf_counter()
     model_dir, processed_dir = Path(model_dir), Path(processed_dir)
-    res = explain_snapshot(worklist, rows, settings, model_dir, root)
+    mode = mode or current_mode(root)
+    res = explain_snapshot(worklist, rows, settings, model_dir, root, mode)
     cards, contrib, base, summary, rows = res["cards"], res["contrib"], res["base"], res["summary"], res["rows"]
     segments = segment_table(worklist, rows, products)
 
