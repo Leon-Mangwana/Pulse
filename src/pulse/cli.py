@@ -40,8 +40,12 @@ def step_features():
 
 
 def step_train():
+    from pulse.config import current_mode
     from pulse.models import churn, survival
     churn.main()
+    if current_mode() == "summary":
+        print(chr(10) + "fallback mode: time-to-churn model and propensity models skipped (no transactions, no products)")
+        return
     print(chr(10) + "=== time-to-churn and value at risk ===")
     survival.main()
     from pulse import crosssell
@@ -80,6 +84,10 @@ PIPELINE = ["ingest", "features", "train", "score", "monitor"]
 
 
 def run_pipeline():
+    from pulse.config import current_mode
+    if current_mode() == "summary":
+        from pulse.summary_mode import banner
+        print(banner())
     timings = []
     t_all = time.perf_counter()
     for name in PIPELINE:
