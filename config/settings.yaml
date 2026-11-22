@@ -59,6 +59,9 @@ model:                        # churn model (src/pulse/models/churn.py)
     balance_drop: 0.5         # balance below this share of its 6-month average
     activity_drop: 0.5        # transaction count below this share of its 6-month average
     leak_rise: 0.15           # wallet + other-bank share of outflows up by this many points
+  summary_split:              # fallback mode only (no time axis): stratified random split, fixed seed
+    valid_share: 0.20
+    test_share: 0.20
   logistic:
     C: 1.0                    # inverse regularisation strength
     clip_percentiles: [1, 99] # winsorise features at these train-set percentiles
@@ -90,6 +93,11 @@ value:                        # expected 12-month value to the bank, USD (src/pu
     personal_loan: 120
     sme_package: 150
   min_value_usd: 1.0          # floor so an active customer never has exactly zero value at risk
+  summary:                    # fallback mode: no fee or balance history, so value is an assumption
+    balance_feature: balance_usd      # mapped feature (if present) x interest_margin_usd
+    products_feature: n_products      # mapped feature (if present) x margin_per_product_usd
+    margin_per_product_usd: 20
+    default_value_usd: 60             # used when neither feature is mapped; replace with the bank's figure
 
 pseudonymise:                 # customer ids are replaced before anything reaches a dashboard or log
   salt: "pulse-2026-bancabc"  # change this before the real data arrives
@@ -104,6 +112,9 @@ survival:                     # time-to-churn, Cox proportional hazards (src/pul
   bands:                      # urgency from the Cox probabilities
     act_this_week_p30: 0.15   # "act this week" if P(churn within 30 days) is at or above this
     act_this_month_p90: 0.15  # else "act this month" if P(churn within 90 days) is at or above this; else "watch"
+  fallback_bands:             # fallback mode has no time-to-churn model: bands from the churn probability alone
+    act_this_week_p: 0.50
+    act_this_month_p: 0.25
 
 worklist:
   top_shares: [0.05, 0.10, 0.20]   # call-list sizes compared in the value-at-risk report
@@ -122,6 +133,7 @@ crosssell:                    # next best product (src/pulse/crosssell.py); the 
 
 explain:                      # reason codes and action cards (src/pulse/explain.py)
   reasons_path: config/reasons.yaml
+  reasons_path_summary: config/reasons_summary.yaml   # fallback mode templates (customer-level columns)
   actions_path: config/actions.yaml
   n_reasons: 3                # reasons per card, one per family, largest positive SHAP first
   summary_top: 15             # features in the global SHAP summary
