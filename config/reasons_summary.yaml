@@ -1,0 +1,60 @@
+# Reason templates for FALLBACK (summary) mode, where the model inputs are customer-level
+# columns mapped under `features:` in schema.yaml rather than transaction features.
+#
+# Same rules as reasons.yaml. Blocks are keyed by the canonical feature name you chose in
+# schema.yaml; the ones below cover common names. Any mapped feature without a block falls back
+# to `generic`, a fixed sentence that names the feature and compares the customer's value with
+# the typical value (median) of customers who stayed. No free text is generated (rule 8).
+#
+# Placeholders: every mapped feature, the aliases from reasons.yaml ({name_pct} etc.), and
+# {label} (the feature name with spaces), {value} (this customer) and {typical} (median of stayers).
+
+families:
+  balance_drain: "Balance drain"
+  activity_drop: "Activity drop"
+  friction: "Fees and friction"
+  new_customer: "New relationship"
+  profile: "Customer profile"
+
+generic:
+  family: profile
+  template: "{label} is {value:,.2f}; customers who stayed are typically at {typical:,.2f}."
+
+features:
+  tenure_months:
+    family: new_customer
+    when: [[tenure_months, "<", 12]]
+    template: "With the bank for only {tenure_months:.0f} month(s); the first year is when most customers leave."
+  balance_usd:
+    family: balance_drain
+    template: "Balance of {balance_usd:,.0f} USD against a typical {typical:,.0f} USD for customers who stayed."
+  balance_change_pct:
+    family: balance_drain
+    when: [[balance_change_pct, "<", 0]]
+    template: "Balance down {balance_change_pct_abs_pct:.0f}% over the period."
+  n_products:
+    family: profile
+    when: [[n_products, "<=", 1]]
+    template: "Holds only {n_products:.0f} product; single-product customers have the least to lose by leaving."
+  active_flag:
+    family: activity_drop
+    when: [[active_flag, "<", 1]]
+    template: "Flagged inactive in the source data."
+  txn_count_3m:
+    family: activity_drop
+    template: "{txn_count_3m:.0f} transaction(s) in the last 3 months against a typical {typical:.0f}."
+  days_since_last_txn:
+    family: activity_drop
+    when: [[days_since_last_txn, ">=", 30]]
+    template: "No transaction for {days_since_last_txn:.0f} days."
+  complaints_12m:
+    family: friction
+    when: [[complaints_12m, ">=", 1]]
+    template: "{complaints_12m:.0f} complaint(s) logged in the last 12 months."
+  fees_12m_usd:
+    family: friction
+    template: "Paid {fees_12m_usd:,.0f} USD in fees over 12 months against a typical {typical:,.0f} USD."
+  digital_user:
+    family: friction
+    when: [[digital_user, "<", 1]]
+    template: "Not using digital channels; every transaction costs a branch visit or a USSD fee."
