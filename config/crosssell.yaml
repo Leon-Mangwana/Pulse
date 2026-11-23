@@ -61,5 +61,7 @@ fallback:
     reason: "Holds the everyday products already. A foreign-currency savings account protects savings against ZiG movements."
 
 # Guardrail: customers in the top decile of value at risk get this instead of any offer.
+summary_review: "No product data in this dataset: review the relationship on the call and record what the customer holds elsewhere."
+
 retention:
   action: "Retention call, not a sales offer: {value_at_risk_usd:,.0f} USD of annual value at risk. Ask what changed, review fees, confirm the salary or remittance still lands here."

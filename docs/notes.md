@@ -1373,3 +1373,76 @@ after a new pipeline run.
 - *What does the dashboard do if the pipeline reruns?* The api serves the old outputs until
   `/reload`; the dashboard serves its cache until "Refresh data" or five minutes. Both are
   deliberate: a demo should not change under the presenter.
+
+## Phase 8: rehearsal and the 4 December runbook (21 Nov 2026)
+
+### Two surprise datasets
+
+`scripts/make_rehearsal.py` writes them to `data/rehearsal/a/` and `data/rehearsal/b/` (git-ignored,
+regenerate with the script; the seed is fixed so every machine gets the same files). I verified
+privately that both go from raw files to a working API through schema.yaml alone, with no code
+change; the schema files I used are not in the repository, because finding the mapping is the
+exercise. Do not read the generator before the rehearsals. What I can say: (a) needs most of the
+schema options that now exist (`date_format` per file, `values` maps, `distinct`,
+`one_row_per_key`), and (b) exercises the fallback mode below. Both produce believable numbers,
+and (a) raises at least one of the plan's red flags, which is deliberate.
+
+### The fallback path, and the one modelling decision in it
+
+When `schema.yaml` maps a single `customer_summary` table, `pulse.config.data_mode` reports
+`summary` and every step adapts: ingest loads the one table (churn flag parsed from 1/0, yes/no
+or a `values` map; every column under `features:` cast to a number; empty transaction tables
+created), the feature step writes one row per customer with medians filled and a `_missing` flag
+where more than 1% of a column was empty, training uses a stratified random split, scoring takes
+urgency from probability bands and value from the `value.summary` assumptions, explanations use
+`config/reasons_summary.yaml`, the monitor logs the run but writes no drift report, and the API
+returns null for the time-to-churn fields.
+
+The decision is the split. With one snapshot there is no past and future to separate, so the
+only honest option is a stratified random split with the fixed seed: train 60%, validation 20%,
+test 20%, each with the same churn rate. Honest, but optimistic: customers in the test block come
+from the same month as the training block, so the score says how well the model ranks customers
+*like the ones who already left*, not how well it will rank next quarter's. The LightGBM leaf
+floor is also scaled to the table (2% of training rows, at least 20), because the Phase 2
+candidates were tuned for tens of thousands of customer-months and will not split at all on a
+few thousand rows.
+
+### What Pulse cannot claim in fallback mode
+
+Printed by the pipeline and written in the runbook, because a judge will ask:
+
+- no leakage guarantee: the flag was built outside Pulse, and a column like balance may describe
+  the customer after they left (zero because the account was closed)
+- no time-based validation, so the headline numbers are optimistic
+- no 90-day horizon: the flag means whatever the bank meant by it
+- no urgency timing: there is no time-to-churn model
+- no behavioural reasons: cards describe the mapped columns against the typical value of
+  customers who stayed, not what changed in the account
+- value at risk rests on three numbers in settings.yaml
+- no next best product: the top decile gets a retention action, everyone else a review marker
+
+The sentence for the pitch: "with transactions Pulse predicts who leaves next; with this extract
+it ranks who looks like the customers who already left."
+
+### Hardening that fell out of the rehearsal datasets
+
+- `one_row_per_key: true` on a table collapses several rows per primary key into one, keeping
+  the first non-null value of each column. A customer file with one row per account, where the
+  branch is blank on some rows, cannot be deduplicated with `distinct` alone; the error message
+  now names both options.
+- `date_formats:` per column, `PULSE_SCHEMA` to point at another schema file and `PULSE_ROOT` to
+  run against another project root (the Docker image already relied on it).
+- `scripts/profile_data.py` ends with a schema skeleton and guesses which file is which table
+  from column types and row counts; on the synthetic data and both rehearsal sets the guesses
+  were right.
+
+### What a data team might ask
+
+- *Why not auto-detect every numeric column as an input in fallback mode?* Rule 3: source column
+  names must not leak into the code or the screens. Mapping each input in schema.yaml takes a
+  minute with the skeleton and gives every feature a canonical name the templates can use.
+- *Is a stratified split ever acceptable in production?* No. It is the rehearsal answer for an
+  extract with no time axis. The first thing to ask the bank for is a second extract from an
+  earlier month, which turns the problem back into a time split.
+- *What if the flag is "closed account" rather than churn?* Then the model learns closure, and
+  the silent leavers are invisible. Say so, and show the transaction-mode definition on a slide.

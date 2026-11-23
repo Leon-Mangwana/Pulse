@@ -51,6 +51,23 @@ def compute_value(rows: pd.DataFrame, products: pd.DataFrame, cfg: dict) -> pd.D
                          "product_margin_12m_usd": prod, "value_12m_usd": total}, index=rows.index)
 
 
+def summary_value(rows: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Fallback mode: no fee or balance history. Interest margin on the mapped balance column (if
+    any) plus a flat margin per product held (if a product count is mapped); otherwise one default
+    figure per customer. All three numbers live under value.summary in settings.yaml."""
+    s = cfg["summary"]
+    n = len(rows)
+    bal_col, prod_col = s.get("balance_feature"), s.get("products_feature")
+    interest = rows[bal_col].to_numpy(float) * float(cfg["interest_margin_usd"]) if bal_col in rows.columns else np.zeros(n)
+    prod = rows[prod_col].to_numpy(float) * float(s["margin_per_product_usd"]) if prod_col in rows.columns else np.zeros(n)
+    fee = np.zeros(n)
+    if bal_col not in rows.columns and prod_col not in rows.columns:
+        fee = np.full(n, float(s["default_value_usd"]))
+    total = np.maximum(fee + interest + prod, float(cfg["min_value_usd"]))
+    return pd.DataFrame({"fee_income_12m_usd": fee, "interest_margin_12m_usd": interest,
+                         "product_margin_12m_usd": prod, "value_12m_usd": total}, index=rows.index)
+
+
 def call_list_comparison(y: np.ndarray, p: np.ndarray, value: np.ndarray, shares: list[float], seed: int) -> pd.DataFrame:
     """Dollars of 12-month value belonging to customers who actually churned, reached by contacting
     the top share of the list under three orderings: random, by churn probability, by value at risk."""

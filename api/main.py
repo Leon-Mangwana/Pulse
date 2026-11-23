@@ -50,7 +50,7 @@ class WorklistRow(BaseModel):
     segment: str
     branch: str
     p_churn_90d: float
-    p_churn_30d: float
+    p_churn_30d: float | None = Field(None, description="Cox 30-day probability; null in fallback mode")
     value_12m_usd: float
     value_at_risk_usd: float
     urgency: str
@@ -160,6 +160,7 @@ class DriftSummary(BaseModel):
 
 
 class Metrics(BaseModel):
+    mode: str = Field("transactions", description="'transactions' or 'summary' (fallback mode)")
     run_date: str
     seed: int
     n_features: int
@@ -234,7 +235,10 @@ class Store:
         """Last HISTORY_MONTHS snapshots per customer, keyed by pseudonymised reference; raw ids dropped."""
         if not path.exists():
             return pd.DataFrame(columns=["customer_ref", "month", "balance_usd", "money_in_usd", "salary_credit_usd"])
-        f = read_parquet(path)[HISTORY_COLS]
+        f = read_parquet(path)
+        if any(c not in f.columns for c in HISTORY_COLS):      # fallback mode: no monthly history
+            return pd.DataFrame(columns=["customer_ref", "month", "balance_usd", "money_in_usd", "salary_credit_usd"])
+        f = f[HISTORY_COLS]
         keep = sorted(f["snapshot_date"].unique())[-HISTORY_MONTHS:]
         f = f[f["snapshot_date"].isin(keep)].copy()
         pcfg = self.settings["pseudonymise"]
@@ -251,7 +255,11 @@ class Store:
         if not path.exists():
             return None
         summary = json.loads(path.read_text(encoding="utf-8"))
-        families = yaml.safe_load(resolve(self.root, self.settings["explain"]["reasons_path"]).read_text(encoding="utf-8"))["families"]
+        families: dict[str, str] = {}
+        for key in ("reasons_path", "reasons_path_summary"):
+            rp = self.settings["explain"].get(key)
+            if rp and resolve(self.root, rp).exists():
+                families.update(yaml.safe_load(resolve(self.root, rp).read_text(encoding="utf-8")).get("families", {}))
         readings = {r["feature"]: r["reading"] for r in self.metrics.get("top_features", [])}
         df = pd.DataFrame(summary)
         df = df[df["family"].isin(families)]
@@ -340,7 +348,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         for col, val in (("segment", segment), ("branch", branch), ("urgency", urgency)):
             if val is not None:
                 df = df[df[col].str.lower() == val.lower()]
-        rows = df.head(limit)[WORKLIST_FIELDS].to_dict("records")
+        head = df.head(limit)[WORKLIST_FIELDS]
+        rows = head.astype(object).where(head.notna(), None).to_dict("records")
         return WorklistResponse(snapshot_date=store.snapshot_date, total=len(df), returned=len(rows),
                                 total_value_at_risk_usd=round(float(df["value_at_risk_usd"].sum()), 2), rows=rows)
 
@@ -375,7 +384,7 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.get("/metrics", response_model=Metrics, summary="Model results, fairness table, drift and the last run")
     def metrics(store: Store = Depends(get_store)):
         m, lg = store.metrics, store.metrics["lightgbm"]
-        return Metrics(run_date=m["run_date"], seed=m["seed"], n_features=m["n_features"], split=m["split"],
+        return Metrics(mode=m.get("mode", "transactions"), run_date=m["run_date"], seed=m["seed"], n_features=m["n_features"], split=m["split"],
                        model_comparison_test=m["comparison_test"], lightgbm_test=lg["test"], calibration=lg["calibration"],
                        warnings=m["warnings"], fairness_test=m["fairness_test"],
                        survival={k: store.survival.get(k) for k in ("concordance_test", "timing_test", "bands_test") if k in store.survival},

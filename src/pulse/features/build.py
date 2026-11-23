@@ -93,6 +93,10 @@ def write_dictionary(path: Path) -> None:
 
 
 def main(root: Path = PROJECT_ROOT) -> pd.DataFrame:
+    from pulse.config import current_mode
+    if current_mode(root) == "summary":
+        from pulse import summary_mode
+        return summary_mode.main(root)
     settings = load_settings(root)
     t0 = time.perf_counter()
     con = duckdb.connect(str(resolve(root, settings["data"]["duckdb_path"])), read_only=True)

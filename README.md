@@ -31,6 +31,10 @@ py -3.11 -m venv .venv
 | dev | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` | same, with `src/`, `api/`, `dashboard/`, `config/`, `tests/` mounted so edits apply without a rebuild |
 | tests | `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm dashboard python -m pytest -q tests/test_dashboard_app.py` | renders the four pages against the live api; the rest of the suite runs with `python -m pytest` (in the api container on machines where scikit-learn is blocked) |
 | screens | `python scripts/screenshot_pages.py docs/screens` | 1280x720 screenshots of the four pages with headless Edge |
+| profile | `python scripts/profile_data.py data/raw --out data/raw/_profile.md` | columns, types, null rates, date formats and likely join keys of any CSV folder, ending in a schema.yaml skeleton (Phase 8) |
+| rehearsal | `python scripts/make_rehearsal.py` | writes the two surprise datasets to `data/rehearsal/a` and `b`; do not read the script before rehearsing |
+| fallback | (automatic) | when `schema.yaml` maps a single `customer_summary` table, the pipeline runs in fallback mode: stratified split on the bank's churn flag, no survival or product models; see `docs/runbook.md` for what it cannot claim |
+| runbook | `docs/runbook.md` | the timed checklist for 4 December |
 | pipeline | `python -m pulse.cli pipeline` | run every built step in order with timings |
 | tests | `python -m pytest` | run the test suite |
 

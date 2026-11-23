@@ -31,3 +31,6 @@ families:
   life_event:
     action: "Ask about the change in remittances; offer a foreign-currency savings account"
     script: "The remittances that used to arrive have become smaller or less regular and we wanted to check whether anything has changed for the family abroad. If funds are coming through another channel, we can offer a foreign-currency savings account with lower receiving fees."
+  profile:
+    action: "Relationship review call"
+    script: "We are reviewing how well our accounts fit our customers and your profile came up. Is the account still meeting your needs, and is there a product or service that would make it more useful to you?"
